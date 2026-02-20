@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, 
     QFileDialog, QMessageBox, QMenu, QMenuBar, QStatusBar, QProgressDialog,
-    QProgressBar, QPushButton, QStackedWidget
+    QProgressBar, QPushButton, QStackedWidget, QLabel
 )
 from PySide6.QtCore import Qt, Signal, QThread, QEvent
 from PySide6.QtGui import QAction, QImage, QPixmap
@@ -89,6 +89,25 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(5, 5, 5, 5)
         right_layout.addWidget(self.slitscan_preview, 1)
+        
+        preview_buttons = QWidget()
+        preview_buttons_layout = QHBoxLayout(preview_buttons)
+        
+        self.update_preview_button = QPushButton('Update Preview')
+        self.update_preview_button.clicked.connect(self.update_preview)
+        preview_buttons_layout.addWidget(self.update_preview_button)
+        
+        self.preview_size_label = QLabel('Size: -')
+        self.preview_size_label.setStyleSheet('color: #666; font-size: 10px;')
+        preview_buttons_layout.addWidget(self.preview_size_label)
+        
+        preview_buttons_layout.addStretch()
+        
+        self.generate_button = QPushButton('Generate Full Res')
+        self.generate_button.clicked.connect(self.generate_full_scan)
+        preview_buttons_layout.addWidget(self.generate_button)
+        
+        right_layout.addWidget(preview_buttons)
         right_layout.addWidget(self.scan_controls)
         
         splitter.addWidget(right_widget)
@@ -97,9 +116,10 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(splitter)
         
         self.video_preview.line_position_changed.connect(self.on_line_position_changed)
+        self.scan_controls.line_position_changed.connect(self.on_controls_line_position_changed)
         self.scan_controls.params_changed.connect(self.update_preview)
-        self.scan_controls.generate_clicked.connect(self.generate_full_scan)
         self.scan_controls.save_clicked.connect(self.save_image)
+        self.scan_controls.direction_combo.currentTextChanged.connect(self.on_direction_changed)
     
     def create_status_bar(self):
         self.status_bar = QStatusBar()
@@ -236,17 +256,29 @@ class MainWindow(QMainWindow):
         if operation_type == 'preview':
             if result is not None:
                 self.slitscan_preview.set_image(result)
+                if len(result.shape) == 2:
+                    h, w = result.shape
+                else:
+                    h, w = result.shape[0], result.shape[1]
+                self.preview_size_label.setText(f'Size: {w}x{h}')
                 self.status_bar.showMessage("Preview updated")
             else:
+                self.preview_size_label.setText('Size: -')
                 self.status_bar.showMessage("No frames in specified range")
                 
         elif operation_type == 'full_scan':
             if result is not None:
                 self.current_slitscan = result
                 self.slitscan_preview.set_image(result)
+                if len(result.shape) == 2:
+                    h, w = result.shape
+                else:
+                    h, w = result.shape[0], result.shape[1]
+                self.preview_size_label.setText(f'Size: {w}x{h}')
                 self.save_action.setEnabled(True)
                 self.status_bar.showMessage("Full resolution slitscan generated")
             else:
+                self.preview_size_label.setText('Size: -')
                 self.status_bar.showMessage("No frames in specified range")
                 
         elif operation_type == 'save_image':
@@ -366,12 +398,19 @@ class MainWindow(QMainWindow):
         self.start_worker(worker, "Saving image")
     
     def update_preview(self):
-        if self.video_processor.video_path is None or self.is_processing:
+        if self.video_processor.video_path is None:
+            logger.error("Cannot generate preview: No video loaded")
+            return
+        
+        if self.is_processing:
+            logger.error("Cannot generate preview: Already processing")
             return
         
         params = self.scan_controls.get_params()
+        logger.error(f"Preview params: {params}")
         
         if not self.scan_controls.validate_params():
+            logger.error("Cannot generate preview: Params validation failed")
             return
         
         # Create worker
@@ -405,6 +444,12 @@ class MainWindow(QMainWindow):
     
     def on_line_position_changed(self, position):
         self.scan_controls.update_line_position(position)
+    
+    def on_controls_line_position_changed(self, position):
+        self.video_preview.set_line_position(position)
+    
+    def on_direction_changed(self, direction):
+        self.video_preview.set_direction(direction)
     
     def show_about(self):
         QMessageBox.about(

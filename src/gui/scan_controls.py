@@ -10,6 +10,7 @@ class ScanControls(QWidget):
     params_changed = Signal(dict)
     generate_clicked = Signal()
     save_clicked = Signal()
+    line_position_changed = Signal(int)
     
     def __init__(self):
         super().__init__()
@@ -54,14 +55,16 @@ class ScanControls(QWidget):
         stretch_group = QGroupBox('Stretch Factors')
         stretch_layout = QFormLayout()
         
-        self.temporal_stretch_spinbox = QSpinBox()
-        self.temporal_stretch_spinbox.setRange(1, 100)
-        self.temporal_stretch_spinbox.setValue(1)
+        self.temporal_stretch_spinbox = QDoubleSpinBox()
+        self.temporal_stretch_spinbox.setRange(0.1, 100.0)
+        self.temporal_stretch_spinbox.setValue(1.0)
+        self.temporal_stretch_spinbox.setSingleStep(0.1)
         stretch_layout.addRow('Temporal:', self.temporal_stretch_spinbox)
         
-        self.spatial_stretch_spinbox = QSpinBox()
-        self.spatial_stretch_spinbox.setRange(1, 10)
-        self.spatial_stretch_spinbox.setValue(1)
+        self.spatial_stretch_spinbox = QDoubleSpinBox()
+        self.spatial_stretch_spinbox.setRange(0.1, 10.0)
+        self.spatial_stretch_spinbox.setValue(1.0)
+        self.spatial_stretch_spinbox.setSingleStep(0.1)
         stretch_layout.addRow('Spatial:', self.spatial_stretch_spinbox)
         
         stretch_group.setLayout(stretch_layout)
@@ -120,16 +123,6 @@ class ScanControls(QWidget):
         preview_group.setLayout(preview_layout)
         form_layout.addRow(preview_group)
         
-        button_layout = QHBoxLayout()
-        
-        self.update_preview_button = QPushButton('Update Preview')
-        button_layout.addWidget(self.update_preview_button)
-        
-        self.generate_button = QPushButton('Generate Full Res')
-        button_layout.addWidget(self.generate_button)
-        
-        form_layout.addRow(button_layout)
-        
         self.save_button = QPushButton('Save Image')
         self.save_button.setEnabled(False)
         form_layout.addRow(self.save_button)
@@ -139,22 +132,20 @@ class ScanControls(QWidget):
         self.setEnabled(False)
     
     def setup_connections(self):
-        self.direction_combo.currentTextChanged.connect(self.trigger_params_changed)
+        self.direction_combo.currentTextChanged.connect(self.on_direction_changed)
         self.line_position_slider.valueChanged.connect(self.on_position_slider_changed)
         self.line_position_spinbox.valueChanged.connect(self.on_position_spinbox_changed)
-        self.line_width_spinbox.valueChanged.connect(self.trigger_params_changed)
-        self.combine_mode_combo.currentTextChanged.connect(self.trigger_params_changed)
-        self.temporal_stretch_spinbox.valueChanged.connect(self.trigger_params_changed)
-        self.spatial_stretch_spinbox.valueChanged.connect(self.trigger_params_changed)
+        self.line_width_spinbox.valueChanged.connect(self.on_param_changed)
+        self.combine_mode_combo.currentTextChanged.connect(self.on_param_changed)
+        self.temporal_stretch_spinbox.valueChanged.connect(self.on_param_changed)
+        self.spatial_stretch_spinbox.valueChanged.connect(self.on_param_changed)
         self.start_time_edit.timeChanged.connect(self.on_time_changed)
         self.end_time_edit.timeChanged.connect(self.on_time_changed)
-        self.frame_step_spinbox.valueChanged.connect(self.trigger_params_changed)
+        self.frame_step_spinbox.valueChanged.connect(self.on_param_changed)
         self.output_scale_combo.currentTextChanged.connect(self.on_scale_combo_changed)
-        self.custom_scale_spinbox.valueChanged.connect(self.trigger_params_changed)
-        self.preview_quality_combo.currentTextChanged.connect(self.trigger_params_changed)
+        self.custom_scale_spinbox.valueChanged.connect(self.on_param_changed)
+        self.preview_quality_combo.currentTextChanged.connect(self.on_param_changed)
         
-        self.update_preview_button.clicked.connect(self.trigger_params_changed)
-        self.generate_button.clicked.connect(self.generate_clicked.emit)
         self.save_button.clicked.connect(self.save_clicked.emit)
     
     def setup_debounce(self):
@@ -177,13 +168,13 @@ class ScanControls(QWidget):
         self.line_position_spinbox.blockSignals(True)
         self.line_position_spinbox.setValue(value)
         self.line_position_spinbox.blockSignals(False)
-        self.trigger_params_changed()
+        self.line_position_changed.emit(value)
     
     def on_position_spinbox_changed(self, value):
         self.line_position_slider.blockSignals(True)
         self.line_position_slider.setValue(value)
         self.line_position_slider.blockSignals(False)
-        self.trigger_params_changed()
+        self.line_position_changed.emit(value)
     
     def stop_debounce(self):
         if hasattr(self, 'debounce_timer') and self.debounce_timer.isActive():
@@ -192,12 +183,27 @@ class ScanControls(QWidget):
     def __del__(self):
         self.stop_debounce()
     
+    def on_direction_changed(self, direction):
+        self.update_position_range(direction)
+    
+    def update_position_range(self, direction):
+        if direction == 'horizontal':
+            max_pos = max(0, self.video_height - 1) if self.video_loaded else 100
+            self.line_position_slider.setRange(0, max_pos)
+            self.line_position_spinbox.setRange(0, max_pos)
+        else:
+            max_pos = max(0, self.video_width - 1) if self.video_loaded else 100
+            self.line_position_slider.setRange(0, max_pos)
+            self.line_position_spinbox.setRange(0, max_pos)
+    
+    def on_param_changed(self):
+        pass
+    
     def on_time_changed(self):
         start_msecs = self.start_time_edit.time().msecsSinceStartOfDay()
         end_msecs = self.end_time_edit.time().msecsSinceStartOfDay()
         duration = (end_msecs - start_msecs) / 1000.0
         self.duration_label.setText(f'{max(0.0, duration):.2f} s')
-        self.trigger_params_changed()
     
     def on_scale_combo_changed(self, text):
         if text == 'Custom':
@@ -212,7 +218,6 @@ class ScanControls(QWidget):
                 self.custom_scale_spinbox.setValue(0.5)
             elif text == '25%':
                 self.custom_scale_spinbox.setValue(0.25)
-        self.trigger_params_changed()
     
     def set_video_properties(self, fps: float, width: int, height: int, duration: float):
         self.video_loaded = True
