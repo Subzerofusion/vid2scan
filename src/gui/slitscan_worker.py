@@ -81,26 +81,36 @@ class SlitscanWorker(QObject):
     def _run_full_scan(self):
         direction = self.params['direction']
         
-        # Map parameter names to match what extraction methods expect
-        extract_params = {
-            'line_y': self.params['line_pos'] if direction == 'horizontal' else 0,
-            'line_x': self.params['line_pos'] if direction == 'vertical' else 0,
-            'line_width': self.params['line_width'],
-            'combine_mode': self.params['combine_mode'],
-            'start_time': self.params['start_time'],
-            'end_time': self.params['end_time'],
-            'frame_step': self.params['frame_step'],
-            'temporal_stretch': self.params['temporal_stretch'],
-            'spatial_stretch': self.params['spatial_stretch'],
-            'output_scale': self.params['output_scale']
-        }
-        
         if direction == 'horizontal':
+            extract_params = {
+                'line_y': self.params['line_pos'],
+                'line_width': self.params['line_width'],
+                'combine_mode': self.params['combine_mode'],
+                'reverse_stack': self.params.get('reverse_stack', False),
+                'start_time': self.params['start_time'],
+                'end_time': self.params['end_time'],
+                'frame_step': self.params['frame_step'],
+                'temporal_stretch': self.params['temporal_stretch'],
+                'spatial_stretch': self.params['spatial_stretch'],
+                'output_scale': self.params['output_scale']
+            }
             self.result = self.video_processor.extract_horizontal_scan(
                 progress_callback=self._progress_callback,
                 **extract_params
             )
         else:
+            extract_params = {
+                'line_x': self.params['line_pos'],
+                'line_width': self.params['line_width'],
+                'combine_mode': self.params['combine_mode'],
+                'reverse_stack': self.params.get('reverse_stack', False),
+                'start_time': self.params['start_time'],
+                'end_time': self.params['end_time'],
+                'frame_step': self.params['frame_step'],
+                'temporal_stretch': self.params['temporal_stretch'],
+                'spatial_stretch': self.params['spatial_stretch'],
+                'output_scale': self.params['output_scale']
+            }
             self.result = self.video_processor.extract_vertical_scan(
                 progress_callback=self._progress_callback,
                 **extract_params
@@ -111,25 +121,26 @@ class SlitscanWorker(QObject):
     def _run_save_image(self):
         from pathlib import Path
         from PIL import Image
+        import cv2
         
         image = self.params['image']
         save_path = self.save_path
         
-        # Emit progress at 0%
         self.progress_updated.emit(0)
         self._check_cancel()
         
         try:
-            # Save image
-            image_pil = Image.fromarray(image)
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image_pil = Image.fromarray(rgb_image)
             
-            # Emit progress at 50%
             self.progress_updated.emit(50)
             self._check_cancel()
             
-            image_pil.save(save_path, quality=95)
+            if save_path.lower().endswith(('.jpg', '.jpeg')):
+                image_pil.save(save_path, quality=95)
+            else:
+                image_pil.save(save_path)
             
-            # Emit progress at 100%
             self.progress_updated.emit(100)
             self._check_cancel()
             

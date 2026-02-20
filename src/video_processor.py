@@ -7,7 +7,6 @@ from typing import Optional, Callable
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
 
-# Create absolute path for error.log
 log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'error.log')
 if os.path.exists(log_path):
     os.remove(log_path)
@@ -91,59 +90,6 @@ class VideoProcessor:
             return frame
         return None
     
-    def _extract_horizontal_lines(
-        self,
-        frame: np.ndarray,
-        line_y: int,
-        line_width: int,
-        combine_mode: str,
-        spatial_stretch: int
-    ) -> np.ndarray:
-        lines = frame[line_y:line_y + line_width, :]
-        
-        if line_width > 1 and combine_mode == 'average':
-            line = np.mean(lines, axis=0, dtype=np.uint8)
-            line = line.reshape(1, -1)
-        else:
-            line = lines[0] if line_width > 1 else lines
-        
-        if spatial_stretch > 1:
-            if len(line.shape) == 1:
-                line = line.reshape(1, -1)
-            new_width = int(line.shape[1] * spatial_stretch)
-            line = cv2.resize(line, (new_width, 1), interpolation=cv2.INTER_LINEAR)
-        
-        return line
-    
-    def _extract_vertical_lines(
-        self,
-        frame: np.ndarray,
-        line_x: int,
-        line_width: int,
-        combine_mode: str,
-        spatial_stretch: int
-    ) -> np.ndarray:
-        cols = frame[:, line_x:line_x + line_width]
-        
-        if line_width > 1 and combine_mode == 'average':
-            col = np.mean(cols, axis=1, dtype=np.uint8)
-        else:
-            col = cols[:, 0] if line_width > 1 else cols
-        
-        if spatial_stretch > 1:
-            col = cv2.resize(col, (1, int(col.shape[0] * spatial_stretch)), interpolation=cv2.INTER_LINEAR)
-        
-        return col
-    
-    def _apply_temporal_stretch(self, lines: list, temporal_stretch: int) -> np.ndarray:
-        if temporal_stretch > 1:
-            stretched_lines = []
-            for line in lines:
-                for _ in range(temporal_stretch):
-                    stretched_lines.append(line)
-            return np.array(stretched_lines, dtype=np.uint8)
-        return np.array(lines, dtype=np.uint8)
-    
     def extract_horizontal_scan(
         self,
         line_y: int,
@@ -152,9 +98,10 @@ class VideoProcessor:
         start_time: float,
         end_time: float,
         frame_step: int,
-        temporal_stretch: int,
-        spatial_stretch: int,
+        temporal_stretch: float,
+        spatial_stretch: float,
         output_scale: float,
+        reverse_stack: bool = False,
         progress_callback: Optional[Callable] = None
     ) -> Optional[np.ndarray]:
         if self.cap is None:
@@ -172,20 +119,35 @@ class VideoProcessor:
             logger.error(f"Invalid time range: start={start_time}, end={end_time}")
             return None
         
-        lines = []
-        total_frames_to_process = (end_frame - start_frame) // frame_step
+        num_output_rows = (end_frame - start_frame) // frame_step
+        if num_output_rows == 0:
+            logger.warning("No frames to process")
+            return None
+        
+        line_y_clamped = max(0, min(line_y, self.height - 1))
+        actual_line_width = min(line_width, self.height - line_y_clamped)
+        actual_line_width = max(1, actual_line_width)
+        
+        if combine_mode == 'stack':
+            slice_height = actual_line_width
+        else:
+            slice_height = 1
+        
+        output_width = self.width
+        output_height = num_output_rows * slice_height
+        
+        if spatial_stretch != 1.0:
+            output_width = max(1, int(output_width * spatial_stretch))
+        
+        buffer = np.zeros((output_height, output_width, 3), dtype=np.uint8)
+        
+        processed_slices = 0
         
         try:
             for frame_idx in range(start_frame, end_frame, frame_step):
                 if self.is_canceled():
-                    if lines:
-                        lines = self._apply_temporal_stretch(lines, temporal_stretch)
-                        result = np.vstack(lines)
-                        if output_scale != 1.0:
-                            new_height = int(result.shape[0] * output_scale)
-                            new_width = int(result.shape[1] * output_scale)
-                            result = cv2.resize(result, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
-                    return result
+                    if processed_slices > 0:
+                        return buffer[:processed_slices * slice_height]
                     return None
                 
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
@@ -195,20 +157,50 @@ class VideoProcessor:
                     logger.warning(f"Failed to read frame {frame_idx}")
                     continue
                 
-                line = self._extract_horizontal_lines(frame, line_y, line_width, combine_mode, spatial_stretch)
-                lines.append(line)
+                line_end = min(line_y_clamped + actual_line_width, self.height)
                 
-                if progress_callback and len(lines) % 10 == 0:
-                    progress = len(lines) / total_frames_to_process * 100
+                if combine_mode == 'average' and actual_line_width > 1:
+                    slice_rows = line_end - line_y_clamped
+                    if slice_rows > 1:
+                        slice_data = np.mean(frame[line_y_clamped:line_end, :], axis=0)
+                        slice_data = slice_data.astype(np.uint8)
+                        slice_data = slice_data.reshape(1, -1, 3)
+                    else:
+                        slice_data = frame[line_y_clamped:line_end, :].copy()
+                else:
+                    slice_data = frame[line_y_clamped:line_end, :].copy()
+                    if reverse_stack and slice_data.shape[0] > 1:
+                        slice_data = np.flip(slice_data, axis=0)
+                
+                if spatial_stretch != 1.0:
+                    new_slice_height = slice_data.shape[0]
+                    slice_data = cv2.resize(
+                        slice_data,
+                        (output_width, new_slice_height),
+                        interpolation=cv2.INTER_LINEAR
+                    )
+                
+                row_start = processed_slices * slice_height
+                row_end = row_start + slice_data.shape[0]
+                
+                if row_end <= output_height:
+                    buffer[row_start:row_end, :] = slice_data
+                    processed_slices += 1
+                
+                if progress_callback and processed_slices % 10 == 0:
+                    progress = processed_slices / num_output_rows * 100
                     if progress_callback(progress):
                         return None
             
-            if not lines:
+            if processed_slices == 0:
                 logger.warning("No frames extracted")
                 return None
             
-            lines = self._apply_temporal_stretch(lines, temporal_stretch)
-            result = np.vstack(lines)
+            result = buffer[:processed_slices * slice_height]
+            
+            if temporal_stretch != 1.0:
+                new_height = max(1, int(result.shape[0] * temporal_stretch))
+                result = cv2.resize(result, (result.shape[1], new_height), interpolation=cv2.INTER_LINEAR)
             
             if output_scale != 1.0:
                 new_height = max(1, int(result.shape[0] * output_scale))
@@ -228,9 +220,10 @@ class VideoProcessor:
         start_time: float,
         end_time: float,
         frame_step: int,
-        temporal_stretch: int,
-        spatial_stretch: int,
+        temporal_stretch: float,
+        spatial_stretch: float,
         output_scale: float,
+        reverse_stack: bool = False,
         progress_callback: Optional[Callable] = None
     ) -> Optional[np.ndarray]:
         if self.cap is None:
@@ -248,20 +241,35 @@ class VideoProcessor:
             logger.error(f"Invalid time range: start={start_time}, end={end_time}")
             return None
         
-        cols = []
-        total_frames_to_process = (end_frame - start_frame) // frame_step
+        num_output_cols = (end_frame - start_frame) // frame_step
+        if num_output_cols == 0:
+            logger.warning("No frames to process")
+            return None
+        
+        line_x_clamped = max(0, min(line_x, self.width - 1))
+        actual_line_width = min(line_width, self.width - line_x_clamped)
+        actual_line_width = max(1, actual_line_width)
+        
+        if combine_mode == 'stack':
+            slice_width = actual_line_width
+        else:
+            slice_width = 1
+        
+        output_width = num_output_cols * slice_width
+        output_height = self.height
+        
+        if spatial_stretch != 1.0:
+            output_height = max(1, int(output_height * spatial_stretch))
+        
+        buffer = np.zeros((output_height, output_width, 3), dtype=np.uint8)
+        
+        processed_slices = 0
         
         try:
             for frame_idx in range(start_frame, end_frame, frame_step):
                 if self.is_canceled():
-                    if cols:
-                        cols = self._apply_temporal_stretch(cols, temporal_stretch)
-                        result = np.hstack(cols)
-                        if output_scale != 1.0:
-                            new_height = max(1, int(result.shape[0] * output_scale))
-                            new_width = max(1, int(result.shape[1] * output_scale))
-                            result = cv2.resize(result, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
-                    return result
+                    if processed_slices > 0:
+                        return buffer[:, :processed_slices * slice_width]
                     return None
                 
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
@@ -271,20 +279,50 @@ class VideoProcessor:
                     logger.warning(f"Failed to read frame {frame_idx}")
                     continue
                 
-                col = self._extract_vertical_lines(frame, line_x, line_width, combine_mode, spatial_stretch)
-                cols.append(col)
+                line_end = min(line_x_clamped + actual_line_width, self.width)
                 
-                if progress_callback and len(cols) % 10 == 0:
-                    progress = len(cols) / total_frames_to_process * 100
+                if combine_mode == 'average' and actual_line_width > 1:
+                    slice_cols = line_end - line_x_clamped
+                    if slice_cols > 1:
+                        slice_data = np.mean(frame[:, line_x_clamped:line_end], axis=1)
+                        slice_data = slice_data.astype(np.uint8)
+                        slice_data = slice_data.reshape(-1, 1, 3)
+                    else:
+                        slice_data = frame[:, line_x_clamped:line_end].copy()
+                else:
+                    slice_data = frame[:, line_x_clamped:line_end].copy()
+                    if reverse_stack and slice_data.shape[1] > 1:
+                        slice_data = np.flip(slice_data, axis=1)
+                
+                if spatial_stretch != 1.0:
+                    new_slice_width = slice_data.shape[1]
+                    slice_data = cv2.resize(
+                        slice_data,
+                        (new_slice_width, output_height),
+                        interpolation=cv2.INTER_LINEAR
+                    )
+                
+                col_start = processed_slices * slice_width
+                col_end = col_start + slice_data.shape[1]
+                
+                if col_end <= output_width:
+                    buffer[:, col_start:col_end] = slice_data
+                    processed_slices += 1
+                
+                if progress_callback and processed_slices % 10 == 0:
+                    progress = processed_slices / num_output_cols * 100
                     if progress_callback(progress):
                         return None
             
-            if not cols:
+            if processed_slices == 0:
                 logger.warning("No frames extracted")
                 return None
             
-            cols = self._apply_temporal_stretch(cols, temporal_stretch)
-            result = np.hstack(cols)
+            result = buffer[:, :processed_slices * slice_width]
+            
+            if temporal_stretch != 1.0:
+                new_width = max(1, int(result.shape[1] * temporal_stretch))
+                result = cv2.resize(result, (new_width, result.shape[0]), interpolation=cv2.INTER_LINEAR)
             
             if output_scale != 1.0:
                 new_height = max(1, int(result.shape[0] * output_scale))
@@ -305,10 +343,11 @@ class VideoProcessor:
         start_time: float,
         end_time: float,
         frame_step: int,
-        temporal_stretch: int,
-        spatial_stretch: int,
+        temporal_stretch: float,
+        spatial_stretch: float,
         output_scale: float,
         quality: str,
+        reverse_stack: bool = False,
         progress_callback: Optional[Callable] = None
     ) -> Optional[np.ndarray]:
         quality_presets = {
@@ -327,12 +366,12 @@ class VideoProcessor:
                 line_pos, line_width, combine_mode,
                 start_time, end_time, adjusted_frame_step,
                 temporal_stretch, spatial_stretch, adjusted_scale,
-                progress_callback
+                reverse_stack, progress_callback
             )
         else:
             return self.extract_vertical_scan(
                 line_pos, line_width, combine_mode,
                 start_time, end_time, adjusted_frame_step,
                 temporal_stretch, spatial_stretch, adjusted_scale,
-                progress_callback
+                reverse_stack, progress_callback
             )

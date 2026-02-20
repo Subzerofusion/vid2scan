@@ -9,12 +9,15 @@ import cv2
 
 
 class VideoPreviewWidget(QWidget):
+    line_position_changed = Signal(int)
+    
     def __init__(self):
         super().__init__()
         self.setMouseTracking(True)
         self.setMinimumSize(400, 300)
         
-        self.frame = None
+        self._frame = None
+        self._display_pixmap = None
         self.line_position = 0
         self.line_width = 1
         self.direction = 'horizontal'
@@ -22,13 +25,28 @@ class VideoPreviewWidget(QWidget):
         self.dragging = False
         self.drag_start_pos = None
     
+    @property
+    def frame(self):
+        return self._frame
+    
     def set_frame(self, frame: np.ndarray):
-        self.frame = frame
+        self._frame = frame.copy()
         if self.direction == 'horizontal':
             self.line_position = frame.shape[0] // 2
         else:
             self.line_position = frame.shape[1] // 2
+        self._update_display_pixmap()
         self.update()
+    
+    def _update_display_pixmap(self):
+        if self._frame is None:
+            self._display_pixmap = None
+            return
+        rgb_frame = cv2.cvtColor(self._frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_frame.shape
+        bytes_per_line = ch * w
+        qimg = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        self._display_pixmap = QPixmap.fromImage(qimg)
     
     def set_line_position(self, position: int):
         self.line_position = position
@@ -40,25 +58,25 @@ class VideoPreviewWidget(QWidget):
     
     def set_direction(self, direction: str):
         self.direction = direction
-        if self.frame is not None:
+        if self._frame is not None:
             if direction == 'horizontal':
-                self.line_position = self.frame.shape[0] // 2
+                self.line_position = self._frame.shape[0] // 2
             else:
-                self.line_position = self.frame.shape[1] // 2
+                self.line_position = self._frame.shape[1] // 2
         self.update()
     
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        if self.frame is None:
+        if self._display_pixmap is None or self._frame is None:
             painter.fillRect(self.rect(), QColor(30, 30, 30))
             painter.setPen(QColor(150, 150, 150))
             painter.setFont(QFont('Arial', 12))
             painter.drawText(self.rect(), Qt.AlignCenter, "No video loaded")
             return
         
-        h, w = self.frame.shape[:2]
+        h, w = self._frame.shape[:2]
         aspect_ratio = w / h
         
         widget_size = self.size()
@@ -79,11 +97,7 @@ class VideoPreviewWidget(QWidget):
         self.scale_x = scaled_width / w
         self.scale_y = scaled_height / h
         
-        rgb_frame = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
-        h, w, ch = rgb_frame.shape
-        bytes_per_line = ch * w
-        qimg = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-        pixmap = QPixmap.fromImage(qimg).scaled(scaled_width, scaled_height, Qt.KeepAspectRatio)
+        pixmap = self._display_pixmap.scaled(scaled_width, scaled_height, Qt.KeepAspectRatio)
         
         painter.drawPixmap(x, y, pixmap)
         
@@ -121,24 +135,24 @@ class VideoPreviewWidget(QWidget):
                     painter.drawLine(line_x + offset_x, line_start_y, line_x + offset_x, line_end_y)
     
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self.frame is not None:
+        if event.button() == Qt.LeftButton and self._frame is not None:
             self.dragging = True
             self.drag_start_pos = event.pos()
             self.update_line_from_mouse(event.pos())
     
     def mouseMoveEvent(self, event):
-        if self.dragging and self.frame is not None:
+        if self.dragging and self._frame is not None:
             self.update_line_from_mouse(event.pos())
     
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
             if self.dragging:
                 self.dragging = False
-                if self.frame is not None:
-                    self.parent().parent().parent().line_position_changed.emit(self.line_position)
+                if self._frame is not None:
+                    self.line_position_changed.emit(self.line_position)
     
     def update_line_from_mouse(self, pos):
-        if not hasattr(self, 'display_rect'):
+        if not hasattr(self, 'display_rect') or self._frame is None:
             return
         
         x, y, w, h = self.display_rect
@@ -146,12 +160,12 @@ class VideoPreviewWidget(QWidget):
         if self.direction == 'horizontal':
             if x <= pos.x() <= x + w:
                 new_pos = int((pos.y() - y) / self.scale_y)
-                max_pos = self.frame.shape[0] - 1
+                max_pos = self._frame.shape[0] - 1
                 self.line_position = max(0, min(new_pos, max_pos))
         else:
             if y <= pos.y() <= y + h:
                 new_pos = int((pos.x() - x) / self.scale_x)
-                max_pos = self.frame.shape[1] - 1
+                max_pos = self._frame.shape[1] - 1
                 self.line_position = max(0, min(new_pos, max_pos))
         
         self.update()
@@ -159,6 +173,7 @@ class VideoPreviewWidget(QWidget):
 
 class VideoPreview(QWidget):
     line_position_changed = Signal(int)
+    time_changed = Signal(float)
     
     def __init__(self):
         super().__init__()
@@ -166,8 +181,13 @@ class VideoPreview(QWidget):
         self.video_width = 0
         self.video_height = 0
         self.video_fps = 30.0
+        self._video_duration = 0.0
         self.current_time = 0.0
         self.playing = False
+    
+    @property
+    def video_duration(self) -> float:
+        return self._video_duration
         
         self.playback_timer = QTimer()
         self.playback_timer.timeout.connect(self.playback_step)
@@ -181,6 +201,7 @@ class VideoPreview(QWidget):
         
         self.preview_widget = VideoPreviewWidget()
         layout.addWidget(self.preview_widget, 1)
+        self.preview_widget.line_position_changed.connect(self.line_position_changed.emit)
         
         controls_layout = QHBoxLayout()
         
@@ -217,6 +238,9 @@ class VideoPreview(QWidget):
         self.video_height = height
         self.video_fps = fps
     
+    def set_video_duration(self, duration: float):
+        self._video_duration = duration
+    
     def set_line_position(self, position: int):
         self.preview_widget.set_line_position(position)
     
@@ -245,30 +269,46 @@ class VideoPreview(QWidget):
     
     def playback_step(self):
         self.current_time += 1.0 / self.video_fps
+        if self.current_time > self.video_duration:
+            self.current_time = 0
         self.update_time_display()
+        self.time_changed.emit(self.current_time)
     
     def step_forward(self):
         self.current_time += 1.0 / self.video_fps
+        if self.current_time > self.video_duration:
+            self.current_time = self.video_duration
         self.update_time_display()
+        self.time_changed.emit(self.current_time)
     
     def step_backward(self):
         self.current_time -= 1.0 / self.video_fps
         if self.current_time < 0:
             self.current_time = 0
         self.update_time_display()
+        self.time_changed.emit(self.current_time)
     
     def seek_to_time(self, time_sec: float):
-        self.current_time = time_sec
+        self.current_time = max(0, min(time_sec, self.video_duration))
         self.update_time_display()
     
     def on_slider_changed(self, value):
-        pass
+        if self.video_duration > 0:
+            self.current_time = (value / 1000.0) * self.video_duration
+            self.update_time_display()
+            self.time_changed.emit(self.current_time)
     
     def update_time_display(self):
         minutes = int(self.current_time // 60)
         seconds = int(self.current_time % 60)
         milliseconds = int((self.current_time % 1) * 1000)
         self.time_label.setText(f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}")
+        
+        if self.video_duration > 0:
+            slider_value = int((self.current_time / self.video_duration) * 1000)
+            self.time_slider.blockSignals(True)
+            self.time_slider.setValue(slider_value)
+            self.time_slider.blockSignals(False)
     
     def stop_playback(self):
         if hasattr(self, 'playback_timer') and self.playback_timer.isActive():

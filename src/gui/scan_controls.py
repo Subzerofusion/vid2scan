@@ -11,6 +11,9 @@ class ScanControls(QWidget):
     generate_clicked = Signal()
     save_clicked = Signal()
     line_position_changed = Signal(int)
+    line_width_changed = Signal(int)
+    set_start_from_time = Signal()
+    set_end_from_time = Signal()
     
     def __init__(self):
         super().__init__()
@@ -52,6 +55,11 @@ class ScanControls(QWidget):
         self.combine_mode_combo.addItems(['average', 'stack'])
         form_layout.addRow('Combine Mode:', self.combine_mode_combo)
         
+        self.reverse_stack_checkbox = QCheckBox()
+        self.reverse_stack_checkbox.setChecked(False)
+        self.reverse_stack_checkbox.setEnabled(False)
+        form_layout.addRow('Reverse Stack:', self.reverse_stack_checkbox)
+        
         stretch_group = QGroupBox('Stretch Factors')
         stretch_layout = QFormLayout()
         
@@ -76,12 +84,22 @@ class ScanControls(QWidget):
         self.start_time_edit = QTimeEdit()
         self.start_time_edit.setDisplayFormat('HH:mm:ss.zzz')
         self.start_time_edit.setTime(QTime(0, 0, 0, 0))
-        time_layout.addRow('Start:', self.start_time_edit)
+        start_row = QHBoxLayout()
+        start_row.addWidget(self.start_time_edit, 1)
+        self.set_start_button = QPushButton('Set')
+        self.set_start_button.setFixedWidth(40)
+        start_row.addWidget(self.set_start_button)
+        time_layout.addRow('Start:', start_row)
         
         self.end_time_edit = QTimeEdit()
         self.end_time_edit.setDisplayFormat('HH:mm:ss.zzz')
         self.end_time_edit.setTime(QTime(0, 0, 0, 0))
-        time_layout.addRow('End:', self.end_time_edit)
+        end_row = QHBoxLayout()
+        end_row.addWidget(self.end_time_edit, 1)
+        self.set_end_button = QPushButton('Set')
+        self.set_end_button.setFixedWidth(40)
+        end_row.addWidget(self.set_end_button)
+        time_layout.addRow('End:', end_row)
         
         self.duration_label = QLabel('0.00 s')
         time_layout.addRow('Duration:', self.duration_label)
@@ -136,7 +154,8 @@ class ScanControls(QWidget):
         self.line_position_slider.valueChanged.connect(self.on_position_slider_changed)
         self.line_position_spinbox.valueChanged.connect(self.on_position_spinbox_changed)
         self.line_width_spinbox.valueChanged.connect(self.on_param_changed)
-        self.combine_mode_combo.currentTextChanged.connect(self.on_param_changed)
+        self.combine_mode_combo.currentTextChanged.connect(self.on_combine_mode_changed)
+        self.reverse_stack_checkbox.stateChanged.connect(self.on_param_changed)
         self.temporal_stretch_spinbox.valueChanged.connect(self.on_param_changed)
         self.spatial_stretch_spinbox.valueChanged.connect(self.on_param_changed)
         self.start_time_edit.timeChanged.connect(self.on_time_changed)
@@ -147,6 +166,8 @@ class ScanControls(QWidget):
         self.preview_quality_combo.currentTextChanged.connect(self.on_param_changed)
         
         self.save_button.clicked.connect(self.save_clicked.emit)
+        self.set_start_button.clicked.connect(self.set_start_from_time.emit)
+        self.set_end_button.clicked.connect(self.set_end_from_time.emit)
     
     def setup_debounce(self):
         self.debounce_timer = QTimer()
@@ -197,7 +218,11 @@ class ScanControls(QWidget):
             self.line_position_spinbox.setRange(0, max_pos)
     
     def on_param_changed(self):
-        pass
+        self.line_width_changed.emit(self.line_width_spinbox.value())
+    
+    def on_combine_mode_changed(self, mode: str):
+        self.reverse_stack_checkbox.setEnabled(mode == 'stack')
+        self.on_param_changed()
     
     def on_time_changed(self):
         start_msecs = self.start_time_edit.time().msecsSinceStartOfDay()
@@ -273,6 +298,7 @@ class ScanControls(QWidget):
             'line_pos': line_pos,
             'line_width': self.line_width_spinbox.value(),
             'combine_mode': self.combine_mode_combo.currentText(),
+            'reverse_stack': self.reverse_stack_checkbox.isChecked(),
             'start_time': start_time,
             'end_time': end_time,
             'frame_step': self.frame_step_spinbox.value(),
@@ -306,3 +332,11 @@ class ScanControls(QWidget):
     
     def disable_save_button(self):
         self.save_button.setEnabled(False)
+    
+    def set_start_time(self, time_sec: float):
+        msecs = int(time_sec * 1000)
+        self.start_time_edit.setTime(QTime.fromMSecsSinceStartOfDay(msecs))
+    
+    def set_end_time(self, time_sec: float):
+        msecs = int(time_sec * 1000)
+        self.end_time_edit.setTime(QTime.fromMSecsSinceStartOfDay(msecs))

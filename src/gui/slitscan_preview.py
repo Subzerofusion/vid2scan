@@ -22,11 +22,11 @@ class SlitscanPreview(QWidget):
         
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         
         self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setMinimumSize(200, 200)
         self.image_label.setStyleSheet("background-color: #1e1e1e;")
         
@@ -34,7 +34,7 @@ class SlitscanPreview(QWidget):
         main_layout.addWidget(self.scroll_area, 1)
         
         info_frame = QFrame()
-        info_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        info_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         info_layout = QHBoxLayout(info_frame)
         
         self.info_label = QLabel("No slitscan generated")
@@ -49,7 +49,7 @@ class SlitscanPreview(QWidget):
         self.zoom_out_button.clicked.connect(self.zoom_out)
         controls_layout.addWidget(self.zoom_out_button)
         
-        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setRange(10, 400)
         self.zoom_slider.setValue(100)
         self.zoom_slider.valueChanged.connect(self.on_zoom_slider_changed)
@@ -97,21 +97,23 @@ class SlitscanPreview(QWidget):
         
         if len(scaled.shape) == 2:
             h, w = scaled.shape
-            ch = 1
             bytes_per_line = w
-            qimg = QImage(scaled.data, w, h, bytes_per_line, QImage.Format.Format_Grayscale8)
+            scaled_copy = np.ascontiguousarray(scaled)
+            qimg = QImage(scaled_copy.data, w, h, bytes_per_line, QImage.Format.Format_Grayscale8).copy()
         else:
             h, w, ch = scaled.shape
             bytes_per_line = ch * w
             if ch == 3:
                 scaled_rgb = cv2.cvtColor(scaled, cv2.COLOR_BGR2RGB)
-                qimg = QImage(scaled_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                scaled_copy = np.ascontiguousarray(scaled_rgb)
+                qimg = QImage(scaled_copy.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
             else:
-                qimg = QImage(scaled.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+                scaled_copy = np.ascontiguousarray(scaled)
+                qimg = QImage(scaled_copy.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
         
         pixmap = QPixmap.fromImage(qimg)
         self.image_label.setPixmap(pixmap)
-        self.image_label.setMinimumSize(w, h)
+        self.image_label.setMinimumSize(1, 1)
     
     def set_zoom(self, level: float):
         self.zoom_level = max(0.1, min(level, 4.0))
@@ -153,11 +155,13 @@ class SlitscanPreview(QWidget):
             self.set_zoom(scroll_height / image_height)
     
     def clear(self):
+        import gc
         self.current_image = None
         self.frame_count = 0
         self.image_label.clear()
         self.info_label.setText("No slitscan generated")
         self.set_zoom(1.0)
+        gc.collect()
     
     def set_frame_count(self, count: int):
         self.frame_count = count

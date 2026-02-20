@@ -77,18 +77,20 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         
-        splitter = QSplitter(Qt.Horizontal)
+        main_splitter = QSplitter(Qt.Horizontal)
         
         self.video_preview = VideoPreview()
         self.slitscan_preview = SlitscanPreview()
         self.scan_controls = ScanControls()
         
-        splitter.addWidget(self.video_preview)
+        main_splitter.addWidget(self.video_preview)
         
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(5, 5, 5, 5)
-        right_layout.addWidget(self.slitscan_preview, 1)
+        right_splitter = QSplitter(Qt.Vertical)
+        
+        preview_container = QWidget()
+        preview_layout = QVBoxLayout(preview_container)
+        preview_layout.setContentsMargins(5, 5, 5, 5)
+        preview_layout.addWidget(self.slitscan_preview, 1)
         
         preview_buttons = QWidget()
         preview_buttons_layout = QHBoxLayout(preview_buttons)
@@ -107,19 +109,25 @@ class MainWindow(QMainWindow):
         self.generate_button.clicked.connect(self.generate_full_scan)
         preview_buttons_layout.addWidget(self.generate_button)
         
-        right_layout.addWidget(preview_buttons)
-        right_layout.addWidget(self.scan_controls)
+        preview_layout.addWidget(preview_buttons)
         
-        splitter.addWidget(right_widget)
-        splitter.setSizes([840, 560])
+        right_splitter.addWidget(preview_container)
+        right_splitter.addWidget(self.scan_controls)
         
-        main_layout.addWidget(splitter)
+        main_splitter.addWidget(right_splitter)
+        main_splitter.setSizes([840, 560])
+        
+        main_layout.addWidget(main_splitter)
         
         self.video_preview.line_position_changed.connect(self.on_line_position_changed)
         self.scan_controls.line_position_changed.connect(self.on_controls_line_position_changed)
+        self.scan_controls.line_width_changed.connect(self.video_preview.set_line_width)
         self.scan_controls.params_changed.connect(self.update_preview)
         self.scan_controls.save_clicked.connect(self.save_image)
         self.scan_controls.direction_combo.currentTextChanged.connect(self.on_direction_changed)
+        self.video_preview.time_changed.connect(self.on_video_time_changed)
+        self.scan_controls.set_start_from_time.connect(self.on_set_start_from_time)
+        self.scan_controls.set_end_from_time.connect(self.on_set_end_from_time)
     
     def create_status_bar(self):
         self.status_bar = QStatusBar()
@@ -211,41 +219,35 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Canceling...")
     
     def start_worker(self, worker: SlitscanWorker, operation: str):
-        # Cancel any existing operation
         if self.current_worker:
             self.cancel_current_operation()
-            # Wait for previous worker to finish (with timeout to avoid deadlock)
             if self.current_thread and self.current_thread.isRunning():
                 self.current_thread.quit()
-                if not self.current_thread.wait(1000):  # 1 second timeout
-                    logger.warning("Previous worker did not finish in time")
+                if not self.current_thread.wait(2000):
+                    self.current_thread.terminate()
+                    self.current_thread.wait(500)
         
         self.current_worker = worker
         self.current_thread = QThread()
         worker.moveToThread(self.current_thread)
         
-        # Connect signals
         self.current_thread.started.connect(worker.run)
         worker.progress_updated.connect(self.on_worker_progress)
         worker.finished.connect(lambda r, t=operation: self.on_worker_finished(r, t))
         worker.error.connect(self.on_worker_error)
         worker.canceled.connect(lambda r, t=operation: self.on_worker_canceled(r, t))
         
-        # Quit thread when worker finishes
         worker.finished.connect(self.current_thread.quit)
-        
-        # Clean up after worker finishes
         worker.finished.connect(self.cleanup_worker)
-        worker.finished.connect(worker.deleteLater)
+        self.current_thread.finished.connect(worker.deleteLater)
         self.current_thread.finished.connect(self.current_thread.deleteLater)
         
-        # Start
         self.set_processing_state(True, operation)
         self.current_thread.start()
     
     def cleanup_worker(self):
-        if self.current_thread:
-            self.current_thread = None
+        import gc
+        gc.collect()
         self.current_worker = None
     
     def on_worker_progress(self, percent: int):
@@ -276,6 +278,7 @@ class MainWindow(QMainWindow):
                     h, w = result.shape[0], result.shape[1]
                 self.preview_size_label.setText(f'Size: {w}x{h}')
                 self.save_action.setEnabled(True)
+                self.scan_controls.enable_save_button()
                 self.status_bar.showMessage("Full resolution slitscan generated")
             else:
                 self.preview_size_label.setText('Size: -')
@@ -348,6 +351,7 @@ class MainWindow(QMainWindow):
                 self.video_preview.set_video_properties(
                     vp.width, vp.height, vp.fps
                 )
+                self.video_preview.set_video_duration(vp.duration)
             
             self.scan_controls.set_video_properties(
                 vp.fps, vp.width, vp.height, vp.duration
@@ -399,28 +403,22 @@ class MainWindow(QMainWindow):
     
     def update_preview(self):
         if self.video_processor.video_path is None:
-            logger.error("Cannot generate preview: No video loaded")
             return
         
         if self.is_processing:
-            logger.error("Cannot generate preview: Already processing")
             return
         
         params = self.scan_controls.get_params()
-        logger.error(f"Preview params: {params}")
         
         if not self.scan_controls.validate_params():
-            logger.error("Cannot generate preview: Params validation failed")
             return
         
-        # Create worker
         worker = SlitscanWorker(
             self.video_processor,
             params,
             'preview'
         )
         
-        # Start worker
         self.start_worker(worker, "Generating preview")
     
     def generate_full_scan(self):
@@ -450,6 +448,21 @@ class MainWindow(QMainWindow):
     
     def on_direction_changed(self, direction):
         self.video_preview.set_direction(direction)
+    
+    def on_video_time_changed(self, time_sec: float):
+        self._current_time = time_sec
+        if self.video_processor.video_path is not None:
+            frame = self.video_processor.get_frame_at_time(time_sec)
+            if frame is not None:
+                self.video_preview.set_frame(frame)
+    
+    def on_set_start_from_time(self):
+        if hasattr(self, '_current_time'):
+            self.scan_controls.set_start_time(self._current_time)
+    
+    def on_set_end_from_time(self):
+        if hasattr(self, '_current_time'):
+            self.scan_controls.set_end_time(self._current_time)
     
     def show_about(self):
         QMessageBox.about(
