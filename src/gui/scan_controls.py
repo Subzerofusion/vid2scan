@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QComboBox, QSpinBox, QDoubleSpinBox, QSlider, QCheckBox,
     QPushButton, QGroupBox, QTimeEdit
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QTime
+from PySide6.QtCore import Qt, Signal, QTimer, QTime, QSettings
 
 
 class ScanControls(QWidget):
@@ -11,7 +11,8 @@ class ScanControls(QWidget):
     generate_clicked = Signal()
     save_clicked = Signal()
     line_position_changed = Signal(int)
-    line_width_changed = Signal(int)
+    line_width_changed = Signal(int, int)
+    crop_changed = Signal(int, int)
     set_start_from_time = Signal()
     set_end_from_time = Signal()
     
@@ -21,9 +22,11 @@ class ScanControls(QWidget):
         self.video_width = 0
         self.video_height = 0
         self.video_duration = 0.0
+        self.settings = QSettings('Vid2Scan', 'Vid2Scan')
         self.setup_ui()
         self.setup_connections()
         self.setup_debounce()
+        self.load_settings()
     
     def setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -36,7 +39,7 @@ class ScanControls(QWidget):
         self.direction_combo.addItems(['horizontal', 'vertical'])
         form_layout.addRow('Direction:', self.direction_combo)
         
-        self.line_position_slider = QSlider(Qt.Horizontal)
+        self.line_position_slider = QSlider(Qt.Orientation.Horizontal)
         self.line_position_slider.setRange(0, 100)
         self.line_position_spinbox = QSpinBox()
         self.line_position_spinbox.setRange(0, 9999)
@@ -46,10 +49,49 @@ class ScanControls(QWidget):
         pos_layout.addWidget(self.line_position_spinbox)
         form_layout.addRow('Line Position:', pos_layout)
         
-        self.line_width_spinbox = QSpinBox()
-        self.line_width_spinbox.setRange(1, 100)
-        self.line_width_spinbox.setValue(1)
-        form_layout.addRow('Line Width (px):', self.line_width_spinbox)
+        line_width_group = QGroupBox('Line Width (px)')
+        line_width_layout = QVBoxLayout()
+        
+        start_end_layout = QHBoxLayout()
+        start_end_layout.addWidget(QLabel('Start:'))
+        self.line_width_start_spinbox = QSpinBox()
+        self.line_width_start_spinbox.setRange(1, 100)
+        self.line_width_start_spinbox.setValue(1)
+        start_end_layout.addWidget(self.line_width_start_spinbox)
+        start_end_layout.addWidget(QLabel('End:'))
+        self.line_width_end_spinbox = QSpinBox()
+        self.line_width_end_spinbox.setRange(1, 100)
+        self.line_width_end_spinbox.setValue(1)
+        start_end_layout.addWidget(self.line_width_end_spinbox)
+        line_width_layout.addLayout(start_end_layout)
+        
+        lerp_layout = QHBoxLayout()
+        lerp_layout.addWidget(QLabel('Interpolation:'))
+        self.lerp_type_combo = QComboBox()
+        self.lerp_type_combo.addItems(['linear', 'ease-in', 'ease-out', 'ease-in-out'])
+        lerp_layout.addWidget(self.lerp_type_combo)
+        line_width_layout.addLayout(lerp_layout)
+        
+        line_width_group.setLayout(line_width_layout)
+        form_layout.addRow(line_width_group)
+        
+        crop_group = QGroupBox('Vertical Crop (px)')
+        crop_layout = QHBoxLayout()
+        
+        crop_layout.addWidget(QLabel('Top:'))
+        self.crop_top_spinbox = QSpinBox()
+        self.crop_top_spinbox.setRange(0, 9999)
+        self.crop_top_spinbox.setValue(0)
+        crop_layout.addWidget(self.crop_top_spinbox)
+        
+        crop_layout.addWidget(QLabel('Bottom:'))
+        self.crop_bottom_spinbox = QSpinBox()
+        self.crop_bottom_spinbox.setRange(0, 9999)
+        self.crop_bottom_spinbox.setValue(0)
+        crop_layout.addWidget(self.crop_bottom_spinbox)
+        
+        crop_group.setLayout(crop_layout)
+        form_layout.addRow(crop_group)
         
         self.combine_mode_combo = QComboBox()
         self.combine_mode_combo.addItems(['average', 'stack'])
@@ -60,14 +102,8 @@ class ScanControls(QWidget):
         self.reverse_stack_checkbox.setEnabled(False)
         form_layout.addRow('Reverse Stack:', self.reverse_stack_checkbox)
         
-        stretch_group = QGroupBox('Stretch Factors')
+        stretch_group = QGroupBox('Stretch Factor')
         stretch_layout = QFormLayout()
-        
-        self.temporal_stretch_spinbox = QDoubleSpinBox()
-        self.temporal_stretch_spinbox.setRange(0.1, 100.0)
-        self.temporal_stretch_spinbox.setValue(1.0)
-        self.temporal_stretch_spinbox.setSingleStep(0.1)
-        stretch_layout.addRow('Temporal:', self.temporal_stretch_spinbox)
         
         self.spatial_stretch_spinbox = QDoubleSpinBox()
         self.spatial_stretch_spinbox.setRange(0.1, 10.0)
@@ -79,30 +115,32 @@ class ScanControls(QWidget):
         form_layout.addRow(stretch_group)
         
         time_group = QGroupBox('Time Range')
-        time_layout = QFormLayout()
+        time_layout = QVBoxLayout()
         
+        time_row = QHBoxLayout()
+        time_row.addWidget(QLabel('Start:'))
         self.start_time_edit = QTimeEdit()
         self.start_time_edit.setDisplayFormat('HH:mm:ss.zzz')
         self.start_time_edit.setTime(QTime(0, 0, 0, 0))
-        start_row = QHBoxLayout()
-        start_row.addWidget(self.start_time_edit, 1)
+        time_row.addWidget(self.start_time_edit, 1)
         self.set_start_button = QPushButton('Set')
         self.set_start_button.setFixedWidth(40)
-        start_row.addWidget(self.set_start_button)
-        time_layout.addRow('Start:', start_row)
+        time_row.addWidget(self.set_start_button)
+        time_layout.addLayout(time_row)
         
+        time_row2 = QHBoxLayout()
+        time_row2.addWidget(QLabel('End:'))
         self.end_time_edit = QTimeEdit()
         self.end_time_edit.setDisplayFormat('HH:mm:ss.zzz')
         self.end_time_edit.setTime(QTime(0, 0, 0, 0))
-        end_row = QHBoxLayout()
-        end_row.addWidget(self.end_time_edit, 1)
+        time_row2.addWidget(self.end_time_edit, 1)
         self.set_end_button = QPushButton('Set')
         self.set_end_button.setFixedWidth(40)
-        end_row.addWidget(self.set_end_button)
-        time_layout.addRow('End:', end_row)
+        time_row2.addWidget(self.set_end_button)
+        time_layout.addLayout(time_row2)
         
-        self.duration_label = QLabel('0.00 s')
-        time_layout.addRow('Duration:', self.duration_label)
+        self.duration_label = QLabel('Duration: 0.00 s')
+        time_layout.addWidget(self.duration_label)
         
         time_group.setLayout(time_layout)
         form_layout.addRow(time_group)
@@ -126,14 +164,6 @@ class ScanControls(QWidget):
         preview_group = QGroupBox('Preview')
         preview_layout = QFormLayout()
         
-        self.show_frame_preview = QCheckBox()
-        self.show_frame_preview.setChecked(True)
-        preview_layout.addRow('Show Frame:', self.show_frame_preview)
-        
-        self.show_slitscan_preview = QCheckBox()
-        self.show_slitscan_preview.setChecked(True)
-        preview_layout.addRow('Show Slitscan:', self.show_slitscan_preview)
-        
         self.preview_quality_combo = QComboBox()
         self.preview_quality_combo.addItems(['low', 'medium', 'high'])
         preview_layout.addRow('Quality:', self.preview_quality_combo)
@@ -153,10 +183,12 @@ class ScanControls(QWidget):
         self.direction_combo.currentTextChanged.connect(self.on_direction_changed)
         self.line_position_slider.valueChanged.connect(self.on_position_slider_changed)
         self.line_position_spinbox.valueChanged.connect(self.on_position_spinbox_changed)
-        self.line_width_spinbox.valueChanged.connect(self.on_param_changed)
+        self.line_width_start_spinbox.valueChanged.connect(self.on_line_width_changed)
+        self.line_width_end_spinbox.valueChanged.connect(self.on_line_width_changed)
+        self.crop_top_spinbox.valueChanged.connect(self.on_crop_changed)
+        self.crop_bottom_spinbox.valueChanged.connect(self.on_crop_changed)
         self.combine_mode_combo.currentTextChanged.connect(self.on_combine_mode_changed)
         self.reverse_stack_checkbox.stateChanged.connect(self.on_param_changed)
-        self.temporal_stretch_spinbox.valueChanged.connect(self.on_param_changed)
         self.spatial_stretch_spinbox.valueChanged.connect(self.on_param_changed)
         self.start_time_edit.timeChanged.connect(self.on_time_changed)
         self.end_time_edit.timeChanged.connect(self.on_time_changed)
@@ -164,6 +196,7 @@ class ScanControls(QWidget):
         self.output_scale_combo.currentTextChanged.connect(self.on_scale_combo_changed)
         self.custom_scale_spinbox.valueChanged.connect(self.on_param_changed)
         self.preview_quality_combo.currentTextChanged.connect(self.on_param_changed)
+        self.lerp_type_combo.currentTextChanged.connect(self.on_param_changed)
         
         self.save_button.clicked.connect(self.save_clicked.emit)
         self.set_start_button.clicked.connect(self.set_start_from_time.emit)
@@ -183,6 +216,7 @@ class ScanControls(QWidget):
     def emit_params_changed(self):
         if self.pending_params:
             self.pending_params = False
+            self.save_settings()
             self.params_changed.emit(self.get_params())
     
     def on_position_slider_changed(self, value):
@@ -206,6 +240,7 @@ class ScanControls(QWidget):
     
     def on_direction_changed(self, direction):
         self.update_position_range(direction)
+        self.save_settings()
     
     def update_position_range(self, direction):
         if direction == 'horizontal':
@@ -217,8 +252,21 @@ class ScanControls(QWidget):
             self.line_position_slider.setRange(0, max_pos)
             self.line_position_spinbox.setRange(0, max_pos)
     
+    def on_line_width_changed(self):
+        self.line_width_changed.emit(
+            self.line_width_start_spinbox.value(),
+            self.line_width_end_spinbox.value()
+        )
+        self.save_settings()
+    
     def on_param_changed(self):
-        self.line_width_changed.emit(self.line_width_spinbox.value())
+        self.trigger_params_changed()
+    
+    def on_crop_changed(self):
+        self.crop_changed.emit(
+            self.crop_top_spinbox.value(),
+            self.crop_bottom_spinbox.value()
+        )
     
     def on_combine_mode_changed(self, mode: str):
         self.reverse_stack_checkbox.setEnabled(mode == 'stack')
@@ -228,7 +276,7 @@ class ScanControls(QWidget):
         start_msecs = self.start_time_edit.time().msecsSinceStartOfDay()
         end_msecs = self.end_time_edit.time().msecsSinceStartOfDay()
         duration = (end_msecs - start_msecs) / 1000.0
-        self.duration_label.setText(f'{max(0.0, duration):.2f} s')
+        self.duration_label.setText(f'Duration: {max(0.0, duration):.2f} s')
     
     def on_scale_combo_changed(self, text):
         if text == 'Custom':
@@ -255,6 +303,9 @@ class ScanControls(QWidget):
         self.line_position_spinbox.setValue(height // 2)
         self.line_position_slider.setValue(height // 2)
         
+        self.crop_top_spinbox.setRange(0, height - 1)
+        self.crop_bottom_spinbox.setRange(0, height - 1)
+        
         max_msecs = int(duration * 1000)
         self.start_time_edit.setTimeRange(QTime(0, 0), QTime.fromMSecsSinceStartOfDay(max_msecs))
         self.end_time_edit.setTimeRange(QTime(0, 0), QTime.fromMSecsSinceStartOfDay(max_msecs))
@@ -272,15 +323,23 @@ class ScanControls(QWidget):
         self.line_position_slider.blockSignals(False)
         self.line_position_spinbox.blockSignals(False)
     
+    def update_crop(self, crop_top: int, crop_bottom: int):
+        self.crop_top_spinbox.blockSignals(True)
+        self.crop_bottom_spinbox.blockSignals(True)
+        self.crop_top_spinbox.setValue(crop_top)
+        self.crop_bottom_spinbox.setValue(crop_bottom)
+        self.crop_top_spinbox.blockSignals(False)
+        self.crop_bottom_spinbox.blockSignals(False)
+    
     def get_params(self) -> dict:
         direction = self.direction_combo.currentText()
         
         line_pos = self.line_position_spinbox.value()
         
         if direction == 'horizontal':
-            max_pos = self.video_height - 1
+            max_pos = self.video_height - 1 if self.video_height > 0 else 0
         else:
-            max_pos = self.video_width - 1
+            max_pos = self.video_width - 1 if self.video_width > 0 else 0
         
         line_pos = max(0, min(line_pos, max_pos))
         
@@ -296,13 +355,16 @@ class ScanControls(QWidget):
         return {
             'direction': direction,
             'line_pos': line_pos,
-            'line_width': self.line_width_spinbox.value(),
+            'line_width_start': self.line_width_start_spinbox.value(),
+            'line_width_end': self.line_width_end_spinbox.value(),
+            'lerp_type': self.lerp_type_combo.currentText(),
+            'crop_top': self.crop_top_spinbox.value(),
+            'crop_bottom': self.crop_bottom_spinbox.value(),
             'combine_mode': self.combine_mode_combo.currentText(),
             'reverse_stack': self.reverse_stack_checkbox.isChecked(),
             'start_time': start_time,
             'end_time': end_time,
             'frame_step': self.frame_step_spinbox.value(),
-            'temporal_stretch': self.temporal_stretch_spinbox.value(),
             'spatial_stretch': self.spatial_stretch_spinbox.value(),
             'output_scale': self.custom_scale_spinbox.value(),
             'quality': self.preview_quality_combo.currentText()
@@ -315,12 +377,12 @@ class ScanControls(QWidget):
             return False
         
         line_pos = params['line_pos']
-        line_width = params['line_width']
+        line_width = max(params['line_width_start'], params['line_width_end'])
         
         if params['direction'] == 'horizontal':
-            max_pos = self.video_height
+            max_pos = self.video_height if self.video_height > 0 else 1
         else:
-            max_pos = self.video_width
+            max_pos = self.video_width if self.video_width > 0 else 1
         
         if line_pos + line_width > max_pos:
             return False
@@ -340,3 +402,69 @@ class ScanControls(QWidget):
     def set_end_time(self, time_sec: float):
         msecs = int(time_sec * 1000)
         self.end_time_edit.setTime(QTime.fromMSecsSinceStartOfDay(msecs))
+    
+    def save_settings(self):
+        self.settings.setValue('direction', self.direction_combo.currentText())
+        self.settings.setValue('line_width_start', self.line_width_start_spinbox.value())
+        self.settings.setValue('line_width_end', self.line_width_end_spinbox.value())
+        self.settings.setValue('lerp_type', self.lerp_type_combo.currentText())
+        self.settings.setValue('combine_mode', self.combine_mode_combo.currentText())
+        self.settings.setValue('reverse_stack', self.reverse_stack_checkbox.isChecked())
+        self.settings.setValue('spatial_stretch', self.spatial_stretch_spinbox.value())
+        self.settings.setValue('frame_step', self.frame_step_spinbox.value())
+        self.settings.setValue('output_scale_index', self.output_scale_combo.currentIndex())
+        self.settings.setValue('custom_scale', self.custom_scale_spinbox.value())
+        self.settings.setValue('preview_quality', self.preview_quality_combo.currentText())
+    
+    def load_settings(self):
+        direction = self.settings.value('direction', 'horizontal')
+        if isinstance(direction, str):
+            direction_index = self.direction_combo.findText(direction)
+            if direction_index >= 0:
+                self.direction_combo.setCurrentIndex(direction_index)
+        
+        line_width_start = self.settings.value('line_width_start', 1)
+        if line_width_start is not None:
+            self.line_width_start_spinbox.setValue(int(line_width_start))
+        
+        line_width_end = self.settings.value('line_width_end', 1)
+        if line_width_end is not None:
+            self.line_width_end_spinbox.setValue(int(line_width_end))
+        
+        lerp_type = self.settings.value('lerp_type', 'linear')
+        if isinstance(lerp_type, str):
+            lerp_index = self.lerp_type_combo.findText(lerp_type)
+            if lerp_index >= 0:
+                self.lerp_type_combo.setCurrentIndex(lerp_index)
+        
+        combine_mode = self.settings.value('combine_mode', 'average')
+        if isinstance(combine_mode, str):
+            combine_index = self.combine_mode_combo.findText(combine_mode)
+            if combine_index >= 0:
+                self.combine_mode_combo.setCurrentIndex(combine_index)
+        
+        reverse_stack = self.settings.value('reverse_stack', False)
+        if reverse_stack is not None:
+            self.reverse_stack_checkbox.setChecked(bool(reverse_stack))
+        
+        spatial_stretch = self.settings.value('spatial_stretch', 1.0)
+        if spatial_stretch is not None:
+            self.spatial_stretch_spinbox.setValue(float(spatial_stretch))
+        
+        frame_step = self.settings.value('frame_step', 1)
+        if frame_step is not None:
+            self.frame_step_spinbox.setValue(int(frame_step))
+        
+        output_scale_index = self.settings.value('output_scale_index', 0)
+        if output_scale_index is not None:
+            self.output_scale_combo.setCurrentIndex(int(output_scale_index))
+        
+        custom_scale = self.settings.value('custom_scale', 1.0)
+        if custom_scale is not None:
+            self.custom_scale_spinbox.setValue(float(custom_scale))
+        
+        preview_quality = self.settings.value('preview_quality', 'medium')
+        if isinstance(preview_quality, str):
+            quality_index = self.preview_quality_combo.findText(preview_quality)
+            if quality_index >= 0:
+                self.preview_quality_combo.setCurrentIndex(quality_index)

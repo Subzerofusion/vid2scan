@@ -1,10 +1,10 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, 
     QFileDialog, QMessageBox, QMenu, QMenuBar, QStatusBar, QProgressDialog,
-    QProgressBar, QPushButton, QStackedWidget, QLabel
+    QProgressBar, QPushButton, QStackedWidget, QLabel, QScrollArea, QFrame
 )
 from PySide6.QtCore import Qt, Signal, QThread, QEvent
-from PySide6.QtGui import QAction, QImage, QPixmap
+from PySide6.QtGui import QAction, QImage, QPixmap, QShortcut, QKeySequence
 import numpy as np
 import logging
 from pathlib import Path
@@ -37,8 +37,13 @@ class MainWindow(QMainWindow):
         self.create_central_widget()
         self.create_status_bar()
         self.setup_status_bar_progress()
+        self.setup_shortcuts()
         
         self.scan_controls.setEnabled(False)
+    
+    def setup_shortcuts(self):
+        self.cancel_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self.cancel_shortcut.activated.connect(self.cancel_current_operation)
     
     def create_menu_bar(self):
         menubar = self.menuBar()
@@ -77,20 +82,26 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         
-        main_splitter = QSplitter(Qt.Horizontal)
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
         
-        self.video_preview = VideoPreview()
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.slitscan_preview = SlitscanPreview()
-        self.scan_controls = ScanControls()
+        self.video_preview = VideoPreview()
         
-        main_splitter.addWidget(self.video_preview)
+        left_splitter = QSplitter(Qt.Orientation.Vertical)
+        left_splitter.addWidget(self.slitscan_preview)
+        left_splitter.addWidget(self.video_preview)
+        left_splitter.setSizes([450, 450])
         
-        right_splitter = QSplitter(Qt.Vertical)
+        left_layout.addWidget(left_splitter)
+        main_splitter.addWidget(left_widget)
         
-        preview_container = QWidget()
-        preview_layout = QVBoxLayout(preview_container)
-        preview_layout.setContentsMargins(5, 5, 5, 5)
-        preview_layout.addWidget(self.slitscan_preview, 1)
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(5, 5, 5, 5)
         
         preview_buttons = QWidget()
         preview_buttons_layout = QHBoxLayout(preview_buttons)
@@ -109,19 +120,26 @@ class MainWindow(QMainWindow):
         self.generate_button.clicked.connect(self.generate_full_scan)
         preview_buttons_layout.addWidget(self.generate_button)
         
-        preview_layout.addWidget(preview_buttons)
+        right_layout.addWidget(preview_buttons)
         
-        right_splitter.addWidget(preview_container)
-        right_splitter.addWidget(self.scan_controls)
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        controls_scroll.setFrameShape(QFrame.Shape.NoFrame)
         
-        main_splitter.addWidget(right_splitter)
-        main_splitter.setSizes([840, 560])
+        self.scan_controls = ScanControls()
+        controls_scroll.setWidget(self.scan_controls)
+        right_layout.addWidget(controls_scroll, 1)
+        
+        main_splitter.addWidget(right_widget)
+        main_splitter.setSizes([1000, 400])
         
         main_layout.addWidget(main_splitter)
         
         self.video_preview.line_position_changed.connect(self.on_line_position_changed)
         self.scan_controls.line_position_changed.connect(self.on_controls_line_position_changed)
         self.scan_controls.line_width_changed.connect(self.video_preview.set_line_width)
+        self.scan_controls.crop_changed.connect(self.on_crop_changed)
         self.scan_controls.params_changed.connect(self.update_preview)
         self.scan_controls.save_clicked.connect(self.save_image)
         self.scan_controls.direction_combo.currentTextChanged.connect(self.on_direction_changed)
@@ -132,20 +150,18 @@ class MainWindow(QMainWindow):
     def create_status_bar(self):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Ready. Open a video to begin.")
+        self.status_bar.showMessage("Ready. Open a video to begin. Press ESC to cancel operations.")
     
     def setup_status_bar_progress(self):
         self.progress_stack = QStackedWidget()
         self.progress_stack.setFixedWidth(200)
         
-        # Page 0: Progress bar (default shown)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_stack.addWidget(self.progress_bar)
         
-        # Page 1: Cancel button (shown on hover)
-        self.cancel_button = QPushButton("✕ Cancel")
+        self.cancel_button = QPushButton("Cancel (ESC)")
         self.cancel_button.setFixedHeight(30)
         self.cancel_button.setStyleSheet("""
             QPushButton {
@@ -165,26 +181,21 @@ class MainWindow(QMainWindow):
         self.cancel_button.clicked.connect(self.cancel_current_operation)
         self.progress_stack.addWidget(self.cancel_button)
         
-        # Install event filter on stacked widget
         self.progress_stack.installEventFilter(self)
         
-        # Initially show progress bar
         self.progress_stack.setCurrentIndex(0)
         self.progress_stack.setVisible(False)
         
-        # Add to status bar as permanent widget
         self.status_bar.addPermanentWidget(self.progress_stack)
     
     def eventFilter(self, obj, event):
         if obj == self.progress_stack and self.progress_stack.isVisible():
             if event.type() == QEvent.Type.Enter:
-                # Mouse entered - show cancel button
                 if self.is_processing:
                     self.progress_stack.setCurrentIndex(1)
                     return False
             
             elif event.type() == QEvent.Type.Leave:
-                # Mouse left - show progress bar
                 if self.is_processing:
                     self.progress_stack.setCurrentIndex(0)
                     return False
@@ -199,22 +210,21 @@ class MainWindow(QMainWindow):
             self.progress_stack.setCurrentIndex(0)
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(0)
-            self.status_bar.showMessage(f"{operation}...")
+            self.status_bar.showMessage(f"{operation}... (Press ESC to cancel)")
             self.scan_controls.setEnabled(False)
             self.video_preview.setEnabled(False)
             self.save_action.setEnabled(False)
         else:
             self.progress_stack.setVisible(False)
             self.progress_stack.setCurrentIndex(0)
-            self.status_bar.showMessage("Ready")
+            self.status_bar.showMessage("Ready. Press ESC to cancel operations.")
             self.scan_controls.setEnabled(True)
             self.video_preview.setEnabled(True)
-            # Re-enable save action only if we have a slitscan
             if self.current_slitscan is not None:
                 self.save_action.setEnabled(True)
     
     def cancel_current_operation(self):
-        if self.current_worker:
+        if self.is_processing and self.current_worker:
             self.current_worker.cancel()
             self.status_bar.showMessage("Canceling...")
     
@@ -252,7 +262,7 @@ class MainWindow(QMainWindow):
     
     def on_worker_progress(self, percent: int):
         self.progress_bar.setValue(percent)
-        self.status_bar.showMessage(f"Processing... {percent}%")
+        self.status_bar.showMessage(f"Processing... {percent}% (Press ESC to cancel)")
     
     def on_worker_finished(self, result, operation_type: str):
         if operation_type == 'preview':
@@ -285,7 +295,7 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage("No frames in specified range")
                 
         elif operation_type == 'save_image':
-            if result is not None:
+            if result is not None and self.last_save_path:
                 self.status_bar.showMessage(f"Saved: {Path(self.last_save_path).name}")
         
         self.set_processing_state(False)
@@ -308,9 +318,9 @@ class MainWindow(QMainWindow):
                 reply = QMessageBox.question(
                     self, "Operation Canceled",
                     "Processing was canceled. Keep partial result?",
-                    QMessageBox.Yes | QMessageBox.No
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
                 )
-                if reply == QMessageBox.Yes:
+                if reply == QMessageBox.StandardButton.Yes:
                     self.save_action.setEnabled(True)
                     self.status_bar.showMessage("Partial result kept")
                 else:
@@ -387,7 +397,6 @@ class MainWindow(QMainWindow):
         
         self.last_save_path = file_path
         
-        # ALWAYS use threading for save (removed size check)
         worker = SlitscanWorker(
             self.video_processor,
             {
@@ -398,7 +407,6 @@ class MainWindow(QMainWindow):
             save_path=file_path
         )
         
-        # Start worker
         self.start_worker(worker, "Saving image")
     
     def update_preview(self):
@@ -430,14 +438,12 @@ class MainWindow(QMainWindow):
         if not self.scan_controls.validate_params():
             return
         
-        # Create worker
         worker = SlitscanWorker(
             self.video_processor,
             params,
             'full_scan'
         )
         
-        # Start worker
         self.start_worker(worker, "Generating slitscan")
     
     def on_line_position_changed(self, position):
@@ -448,6 +454,9 @@ class MainWindow(QMainWindow):
     
     def on_direction_changed(self, direction):
         self.video_preview.set_direction(direction)
+    
+    def on_crop_changed(self, crop_top: int, crop_bottom: int):
+        self.video_preview.set_crop(crop_top, crop_bottom)
     
     def on_video_time_changed(self, time_sec: float):
         self._current_time = time_sec
@@ -475,7 +484,6 @@ class MainWindow(QMainWindow):
         )
     
     def closeEvent(self, event):
-        # Stop timers in child widgets before cleanup
         if hasattr(self, 'scan_controls') and self.scan_controls:
             if hasattr(self.scan_controls, 'stop_debounce'):
                 self.scan_controls.stop_debounce()
@@ -483,7 +491,6 @@ class MainWindow(QMainWindow):
             if hasattr(self.video_preview, 'stop_playback'):
                 self.video_preview.stop_playback()
         
-        # Cancel any ongoing operation
         if self.is_processing and self.current_worker:
             reply = QMessageBox.question(
                 self, 
@@ -495,10 +502,8 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             
-            # Cancel the worker
             self.current_worker.cancel()
             
-            # Wait for thread to finish
             if self.current_thread and self.current_thread.isRunning():
                 self.current_thread.quit()
                 self.current_thread.wait(1000)
@@ -507,6 +512,5 @@ class MainWindow(QMainWindow):
             self.video_processor.close()
             event.accept()
         
-        # No processing - clean shutdown
         self.video_processor.close()
         event.accept()

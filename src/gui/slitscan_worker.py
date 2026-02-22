@@ -84,15 +84,18 @@ class SlitscanWorker(QObject):
         if direction == 'horizontal':
             extract_params = {
                 'line_y': self.params['line_pos'],
-                'line_width': self.params['line_width'],
+                'line_width_start': self.params['line_width_start'],
+                'line_width_end': self.params['line_width_end'],
+                'lerp_type': self.params['lerp_type'],
                 'combine_mode': self.params['combine_mode'],
                 'reverse_stack': self.params.get('reverse_stack', False),
                 'start_time': self.params['start_time'],
                 'end_time': self.params['end_time'],
                 'frame_step': self.params['frame_step'],
-                'temporal_stretch': self.params['temporal_stretch'],
                 'spatial_stretch': self.params['spatial_stretch'],
-                'output_scale': self.params['output_scale']
+                'output_scale': self.params['output_scale'],
+                'crop_top': self.params.get('crop_top', 0),
+                'crop_bottom': self.params.get('crop_bottom', 0)
             }
             self.result = self.video_processor.extract_horizontal_scan(
                 progress_callback=self._progress_callback,
@@ -101,15 +104,18 @@ class SlitscanWorker(QObject):
         else:
             extract_params = {
                 'line_x': self.params['line_pos'],
-                'line_width': self.params['line_width'],
+                'line_width_start': self.params['line_width_start'],
+                'line_width_end': self.params['line_width_end'],
+                'lerp_type': self.params['lerp_type'],
                 'combine_mode': self.params['combine_mode'],
                 'reverse_stack': self.params.get('reverse_stack', False),
                 'start_time': self.params['start_time'],
                 'end_time': self.params['end_time'],
                 'frame_step': self.params['frame_step'],
-                'temporal_stretch': self.params['temporal_stretch'],
                 'spatial_stretch': self.params['spatial_stretch'],
-                'output_scale': self.params['output_scale']
+                'output_scale': self.params['output_scale'],
+                'crop_top': self.params.get('crop_top', 0),
+                'crop_bottom': self.params.get('crop_bottom', 0)
             }
             self.result = self.video_processor.extract_vertical_scan(
                 progress_callback=self._progress_callback,
@@ -136,9 +142,9 @@ class SlitscanWorker(QObject):
             self.progress_updated.emit(50)
             self._check_cancel()
             
-            if save_path.lower().endswith(('.jpg', '.jpeg')):
+            if save_path and save_path.lower().endswith(('.jpg', '.jpeg')):
                 image_pil.save(save_path, quality=95)
-            else:
+            elif save_path:
                 image_pil.save(save_path)
             
             self.progress_updated.emit(100)
