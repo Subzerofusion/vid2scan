@@ -15,6 +15,8 @@ class ScanControls(QWidget):
     crop_changed = Signal(int, int)
     set_start_from_time = Signal()
     set_end_from_time = Signal()
+    go_to_start_time = Signal()
+    go_to_end_time = Signal()
     
     def __init__(self):
         super().__init__()
@@ -72,6 +74,19 @@ class ScanControls(QWidget):
         lerp_layout.addWidget(self.lerp_type_combo)
         line_width_layout.addLayout(lerp_layout)
         
+        blend_layout = QHBoxLayout()
+        self.gaussian_blend_checkbox = QCheckBox()
+        self.gaussian_blend_checkbox.setChecked(False)
+        blend_layout.addWidget(self.gaussian_blend_checkbox)
+        blend_layout.addWidget(QLabel('Blend (px):'))
+        self.gaussian_blend_spinbox = QSpinBox()
+        self.gaussian_blend_spinbox.setRange(1, 50)
+        self.gaussian_blend_spinbox.setValue(5)
+        self.gaussian_blend_spinbox.setEnabled(False)
+        blend_layout.addWidget(self.gaussian_blend_spinbox)
+        blend_layout.addStretch()
+        line_width_layout.addLayout(blend_layout)
+        
         line_width_group.setLayout(line_width_layout)
         form_layout.addRow(line_width_group)
         
@@ -126,6 +141,9 @@ class ScanControls(QWidget):
         self.set_start_button = QPushButton('Set')
         self.set_start_button.setFixedWidth(40)
         time_row.addWidget(self.set_start_button)
+        self.go_start_button = QPushButton('Go')
+        self.go_start_button.setFixedWidth(40)
+        time_row.addWidget(self.go_start_button)
         time_layout.addLayout(time_row)
         
         time_row2 = QHBoxLayout()
@@ -137,6 +155,9 @@ class ScanControls(QWidget):
         self.set_end_button = QPushButton('Set')
         self.set_end_button.setFixedWidth(40)
         time_row2.addWidget(self.set_end_button)
+        self.go_end_button = QPushButton('Go')
+        self.go_end_button.setFixedWidth(40)
+        time_row2.addWidget(self.go_end_button)
         time_layout.addLayout(time_row2)
         
         self.duration_label = QLabel('Duration: 0.00 s')
@@ -188,7 +209,7 @@ class ScanControls(QWidget):
         self.crop_top_spinbox.valueChanged.connect(self.on_crop_changed)
         self.crop_bottom_spinbox.valueChanged.connect(self.on_crop_changed)
         self.combine_mode_combo.currentTextChanged.connect(self.on_combine_mode_changed)
-        self.reverse_stack_checkbox.stateChanged.connect(self.on_param_changed)
+        self.reverse_stack_checkbox.stateChanged.connect(self.on_reverse_stack_changed)
         self.spatial_stretch_spinbox.valueChanged.connect(self.on_param_changed)
         self.start_time_edit.timeChanged.connect(self.on_time_changed)
         self.end_time_edit.timeChanged.connect(self.on_time_changed)
@@ -197,10 +218,14 @@ class ScanControls(QWidget):
         self.custom_scale_spinbox.valueChanged.connect(self.on_param_changed)
         self.preview_quality_combo.currentTextChanged.connect(self.on_param_changed)
         self.lerp_type_combo.currentTextChanged.connect(self.on_param_changed)
+        self.gaussian_blend_checkbox.stateChanged.connect(self.on_gaussian_blend_changed)
+        self.gaussian_blend_spinbox.valueChanged.connect(self.on_param_changed)
         
         self.save_button.clicked.connect(self.save_clicked.emit)
         self.set_start_button.clicked.connect(self.set_start_from_time.emit)
         self.set_end_button.clicked.connect(self.set_end_from_time.emit)
+        self.go_start_button.clicked.connect(self.go_to_start_time.emit)
+        self.go_end_button.clicked.connect(self.go_to_end_time.emit)
     
     def setup_debounce(self):
         self.debounce_timer = QTimer()
@@ -270,6 +295,13 @@ class ScanControls(QWidget):
     
     def on_combine_mode_changed(self, mode: str):
         self.reverse_stack_checkbox.setEnabled(mode == 'stack')
+        self.save_settings()
+    
+    def on_reverse_stack_changed(self):
+        self.save_settings()
+    
+    def on_gaussian_blend_changed(self):
+        self.gaussian_blend_spinbox.setEnabled(self.gaussian_blend_checkbox.isChecked())
         self.on_param_changed()
     
     def on_time_changed(self):
@@ -331,6 +363,14 @@ class ScanControls(QWidget):
         self.crop_top_spinbox.blockSignals(False)
         self.crop_bottom_spinbox.blockSignals(False)
     
+    def get_start_time(self) -> float:
+        msecs = self.start_time_edit.time().msecsSinceStartOfDay()
+        return msecs / 1000.0
+    
+    def get_end_time(self) -> float:
+        msecs = self.end_time_edit.time().msecsSinceStartOfDay()
+        return msecs / 1000.0
+    
     def get_params(self) -> dict:
         direction = self.direction_combo.currentText()
         
@@ -362,6 +402,8 @@ class ScanControls(QWidget):
             'crop_bottom': self.crop_bottom_spinbox.value(),
             'combine_mode': self.combine_mode_combo.currentText(),
             'reverse_stack': self.reverse_stack_checkbox.isChecked(),
+            'gaussian_blend': self.gaussian_blend_checkbox.isChecked(),
+            'gaussian_blend_pixels': self.gaussian_blend_spinbox.value(),
             'start_time': start_time,
             'end_time': end_time,
             'frame_step': self.frame_step_spinbox.value(),
@@ -415,6 +457,8 @@ class ScanControls(QWidget):
         self.settings.setValue('output_scale_index', self.output_scale_combo.currentIndex())
         self.settings.setValue('custom_scale', self.custom_scale_spinbox.value())
         self.settings.setValue('preview_quality', self.preview_quality_combo.currentText())
+        self.settings.setValue('gaussian_blend', self.gaussian_blend_checkbox.isChecked())
+        self.settings.setValue('gaussian_blend_pixels', self.gaussian_blend_spinbox.value())
     
     def load_settings(self):
         direction = self.settings.value('direction', 'horizontal')
@@ -468,3 +512,11 @@ class ScanControls(QWidget):
             quality_index = self.preview_quality_combo.findText(preview_quality)
             if quality_index >= 0:
                 self.preview_quality_combo.setCurrentIndex(quality_index)
+        
+        gaussian_blend = self.settings.value('gaussian_blend', False)
+        if gaussian_blend is not None:
+            self.gaussian_blend_checkbox.setChecked(bool(gaussian_blend))
+        
+        gaussian_blend_pixels = self.settings.value('gaussian_blend_pixels', 5)
+        if gaussian_blend_pixels is not None:
+            self.gaussian_blend_spinbox.setValue(int(gaussian_blend_pixels))

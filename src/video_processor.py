@@ -132,6 +132,8 @@ class VideoProcessor:
         reverse_stack: bool = False,
         crop_top: int = 0,
         crop_bottom: int = 0,
+        gaussian_blend: bool = False,
+        gaussian_blend_pixels: int = 5,
         progress_callback: Optional[Callable] = None
     ) -> Optional[np.ndarray]:
         if self.cap is None:
@@ -266,6 +268,8 @@ class VideoProcessor:
         reverse_stack: bool = False,
         crop_top: int = 0,
         crop_bottom: int = 0,
+        gaussian_blend: bool = False,
+        gaussian_blend_pixels: int = 5,
         progress_callback: Optional[Callable] = None
     ) -> Optional[np.ndarray]:
         if self.cap is None:
@@ -393,17 +397,19 @@ class VideoProcessor:
         reverse_stack: bool = False,
         crop_top: int = 0,
         crop_bottom: int = 0,
+        gaussian_blend: bool = False,
+        gaussian_blend_pixels: int = 5,
         progress_callback: Optional[Callable] = None
     ) -> Optional[np.ndarray]:
         quality_presets = {
-            'low': {'frame_step': 10, 'scale': 0.25},
-            'medium': {'frame_step': 5, 'scale': 0.50},
-            'high': {'frame_step': 2, 'scale': 0.75}
+            'low': {'frame_step': max(frame_step, 5), 'scale': 0.5},
+            'medium': {'frame_step': max(frame_step, 2), 'scale': 0.75},
+            'high': {'frame_step': frame_step, 'scale': 1.0}
         }
         
         preset = quality_presets.get(quality, quality_presets['medium'])
         
-        adjusted_frame_step = max(frame_step, preset['frame_step'])
+        adjusted_frame_step = preset['frame_step']
         adjusted_scale = output_scale * preset['scale']
         
         if direction == 'horizontal':
@@ -411,12 +417,14 @@ class VideoProcessor:
                 line_pos, line_width_start, line_width_end, lerp_type, combine_mode,
                 start_time, end_time, adjusted_frame_step,
                 spatial_stretch, adjusted_scale,
-                reverse_stack, crop_top, crop_bottom, progress_callback
+                reverse_stack, crop_top, crop_bottom, 
+                gaussian_blend, gaussian_blend_pixels, progress_callback
             )
         else:
             return self.extract_vertical_scan(
                 line_pos, line_width_start, line_width_end, lerp_type, combine_mode,
                 start_time, end_time, adjusted_frame_step,
                 spatial_stretch, adjusted_scale,
-                reverse_stack, crop_top, crop_bottom, progress_callback
+                reverse_stack, crop_top, crop_bottom,
+                gaussian_blend, gaussian_blend_pixels, progress_callback
             )

@@ -24,6 +24,7 @@ class VideoPreviewWidget(QWidget):
         self.direction = 'horizontal'
         self.crop_top = 0
         self.crop_bottom = 0
+        self._line_position_initialized = False
         
         self.dragging = False
         self.drag_start_pos = None
@@ -33,12 +34,14 @@ class VideoPreviewWidget(QWidget):
     def frame(self):
         return self._frame
     
-    def set_frame(self, frame: np.ndarray):
+    def set_frame(self, frame: np.ndarray, reset_position: bool = False):
         self._frame = frame.copy()
-        if self.direction == 'horizontal':
-            self.line_position = frame.shape[0] // 2
-        else:
-            self.line_position = frame.shape[1] // 2
+        if not self._line_position_initialized or reset_position:
+            if self.direction == 'horizontal':
+                self.line_position = frame.shape[0] // 2
+            else:
+                self.line_position = frame.shape[1] // 2
+            self._line_position_initialized = True
         self._update_display_pixmap()
         self.update()
     
@@ -62,11 +65,13 @@ class VideoPreviewWidget(QWidget):
     
     def set_direction(self, direction: str):
         self.direction = direction
+        self._line_position_initialized = False
         if self._frame is not None:
             if direction == 'horizontal':
                 self.line_position = self._frame.shape[0] // 2
             else:
                 self.line_position = self._frame.shape[1] // 2
+            self._line_position_initialized = True
         self.update()
     
     def set_crop(self, crop_top: int, crop_bottom: int):
@@ -265,8 +270,8 @@ class VideoPreview(QWidget):
         controls_container.setLayout(controls_layout)
         layout.addWidget(controls_container)
     
-    def set_frame(self, frame: np.ndarray):
-        self.preview_widget.set_frame(frame)
+    def set_frame(self, frame: np.ndarray, reset_position: bool = False):
+        self.preview_widget.set_frame(frame, reset_position)
     
     def set_video_properties(self, width: int, height: int, fps: float):
         self.video_width = width

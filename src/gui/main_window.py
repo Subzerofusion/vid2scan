@@ -91,20 +91,9 @@ class MainWindow(QMainWindow):
         self.slitscan_preview = SlitscanPreview()
         self.video_preview = VideoPreview()
         
-        left_splitter = QSplitter(Qt.Orientation.Vertical)
-        left_splitter.addWidget(self.slitscan_preview)
-        left_splitter.addWidget(self.video_preview)
-        left_splitter.setSizes([450, 450])
-        
-        left_layout.addWidget(left_splitter)
-        main_splitter.addWidget(left_widget)
-        
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(5, 5, 5, 5)
-        
         preview_buttons = QWidget()
         preview_buttons_layout = QHBoxLayout(preview_buttons)
+        preview_buttons_layout.setContentsMargins(5, 5, 5, 5)
         
         self.update_preview_button = QPushButton('Update Preview')
         self.update_preview_button.clicked.connect(self.update_preview)
@@ -120,7 +109,24 @@ class MainWindow(QMainWindow):
         self.generate_button.clicked.connect(self.generate_full_scan)
         preview_buttons_layout.addWidget(self.generate_button)
         
-        right_layout.addWidget(preview_buttons)
+        left_splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        preview_container = QWidget()
+        preview_layout = QVBoxLayout(preview_container)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.addWidget(self.slitscan_preview, 1)
+        preview_layout.addWidget(preview_buttons)
+        
+        left_splitter.addWidget(preview_container)
+        left_splitter.addWidget(self.video_preview)
+        left_splitter.setSizes([450, 450])
+        
+        left_layout.addWidget(left_splitter)
+        main_splitter.addWidget(left_widget)
+        
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(5, 5, 5, 5)
         
         controls_scroll = QScrollArea()
         controls_scroll.setWidgetResizable(True)
@@ -146,6 +152,8 @@ class MainWindow(QMainWindow):
         self.video_preview.time_changed.connect(self.on_video_time_changed)
         self.scan_controls.set_start_from_time.connect(self.on_set_start_from_time)
         self.scan_controls.set_end_from_time.connect(self.on_set_end_from_time)
+        self.scan_controls.go_to_start_time.connect(self.on_go_to_start_time)
+        self.scan_controls.go_to_end_time.connect(self.on_go_to_end_time)
     
     def create_status_bar(self):
         self.status_bar = QStatusBar()
@@ -357,7 +365,7 @@ class MainWindow(QMainWindow):
             
             first_frame = self.video_processor.get_frame_at_time(0)
             if first_frame is not None:
-                self.video_preview.set_frame(first_frame)
+                self.video_preview.set_frame(first_frame, reset_position=True)
                 self.video_preview.set_video_properties(
                     vp.width, vp.height, vp.fps
                 )
@@ -463,7 +471,7 @@ class MainWindow(QMainWindow):
         if self.video_processor.video_path is not None:
             frame = self.video_processor.get_frame_at_time(time_sec)
             if frame is not None:
-                self.video_preview.set_frame(frame)
+                self.video_preview.set_frame(frame, reset_position=False)
     
     def on_set_start_from_time(self):
         if hasattr(self, '_current_time'):
@@ -472,6 +480,20 @@ class MainWindow(QMainWindow):
     def on_set_end_from_time(self):
         if hasattr(self, '_current_time'):
             self.scan_controls.set_end_time(self._current_time)
+    
+    def on_go_to_start_time(self):
+        start_time = self.scan_controls.get_start_time()
+        self._current_time = start_time
+        frame = self.video_processor.get_frame_at_time(start_time)
+        if frame is not None:
+            self.video_preview.set_frame(frame, reset_position=False)
+    
+    def on_go_to_end_time(self):
+        end_time = self.scan_controls.get_end_time()
+        self._current_time = end_time
+        frame = self.video_processor.get_frame_at_time(end_time)
+        if frame is not None:
+            self.video_preview.set_frame(frame, reset_position=False)
     
     def show_about(self):
         QMessageBox.about(
