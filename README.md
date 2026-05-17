@@ -4,6 +4,13 @@ A cross-platform Python GUI application for creating line scan and slit scan pho
 
 > **WARNING**: This codebase is entirely "vibe coded" — written by feel, trial-and-error, and guesswork rather than proper software engineering practices. The code works, but it's fragile, untested, and will likely break in unexpected ways. Not a good thing. Use at your own risk.
 
+## Known Issues
+
+- Horizontal rendering: never tested, might be completely broken
+- Combine mode: works well enough that I never verified it actually does anything
+- Quality settings: no idea if they actually change anything
+- "Update Preview" and "Generate Full Res": basically do the same thing
+
 ## Features
 
 - **Multi-pixel slit support**: Extract single-pixel lines or multi-pixel slits (1-100px)
