@@ -295,19 +295,25 @@ class VideoProcessor:
                     result = cv2.resize(
                         result, (new_width, new_height), interpolation=cv2.INTER_LINEAR
                     )
-                
+
+                if reverse_stack:
+                    result = np.flip(result, axis=0)
+
                 return result
-            
+
             slices = raw_slices
-            
+
             if slices:
                 result = np.vstack(slices)
-                
+
                 if output_scale != 1.0:
                     new_height = max(1, int(result.shape[0] * output_scale))
                     new_width = max(1, int(result.shape[1] * output_scale))
                     result = cv2.resize(result, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
-                
+
+                if reverse_stack:
+                    result = np.flip(result, axis=0)
+
                 return result
             
             return None
@@ -491,19 +497,25 @@ class VideoProcessor:
                     result = cv2.resize(
                         result, (new_width, new_height), interpolation=cv2.INTER_LINEAR
                     )
-                
+
+                if reverse_stack:
+                    result = np.flip(result, axis=1)
+
                 return result
-            
+
             slices = raw_slices
-            
+
             if slices:
                 result = np.hstack(slices)
-                
+
                 if output_scale != 1.0:
                     new_height = max(1, int(result.shape[0] * output_scale))
                     new_width = max(1, int(result.shape[1] * output_scale))
                     result = cv2.resize(result, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
-                
+
+                if reverse_stack:
+                    result = np.flip(result, axis=1)
+
                 return result
             
             return None
