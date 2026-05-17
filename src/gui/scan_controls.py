@@ -28,6 +28,7 @@ class ScanControls(QWidget):
         self.video_height = 0
         self.video_duration = 0.0
         self.current_video_path = None
+        self.saved_line_position = None
         self.settings = QSettings('Vid2Scan', 'Vid2Scan')
         self.session_manager = SessionManager()
         self.setup_ui()
@@ -371,13 +372,17 @@ class ScanControls(QWidget):
         self.update_crop_labels(direction)
 
         if direction == 'horizontal':
-            self.line_position_spinbox.setValue(height // 2)
-            self.line_position_slider.setValue(height // 2)
+            pos = self.saved_line_position if self.saved_line_position is not None else height // 2
+            pos = min(pos, height - 1)
+            self.line_position_spinbox.setValue(pos)
+            self.line_position_slider.setValue(pos)
             self.crop_top_spinbox.setRange(0, width - 1)
             self.crop_bottom_spinbox.setRange(0, width - 1)
         else:
-            self.line_position_spinbox.setValue(width // 2)
-            self.line_position_slider.setValue(width // 2)
+            pos = self.saved_line_position if self.saved_line_position is not None else width // 2
+            pos = min(pos, width - 1)
+            self.line_position_spinbox.setValue(pos)
+            self.line_position_slider.setValue(pos)
             self.crop_top_spinbox.setRange(0, height - 1)
             self.crop_bottom_spinbox.setRange(0, height - 1)
         
@@ -464,21 +469,21 @@ class ScanControls(QWidget):
     
     def validate_params(self) -> bool:
         params = self.get_params()
-        
-        if params['start_time'] >= params['end_time']:
+
+        if params['start_time'] >= params['end_time'] and params['end_time'] > 0:
             return False
-        
+
         line_pos = params['line_pos']
         line_width = max(params['line_width_start'], params['line_width_end'])
-        
+
         if params['direction'] == 'horizontal':
             max_pos = self.video_height if self.video_height > 0 else 1
         else:
             max_pos = self.video_width if self.video_width > 0 else 1
-        
+
         if line_pos + line_width > max_pos:
             return False
-        
+
         return True
     
     def enable_save_button(self):
@@ -497,9 +502,14 @@ class ScanControls(QWidget):
     
     def save_settings(self):
         self.settings.setValue('direction', self.direction_combo.currentText())
+        if self.video_loaded:
+            self.settings.setValue('line_position', self.line_position_spinbox.value())
         self.settings.setValue('line_width_start', self.line_width_start_spinbox.value())
         self.settings.setValue('line_width_end', self.line_width_end_spinbox.value())
         self.settings.setValue('lerp_type', self.lerp_type_combo.currentText())
+        if self.video_loaded:
+            self.settings.setValue('crop_top', self.crop_top_spinbox.value())
+            self.settings.setValue('crop_bottom', self.crop_bottom_spinbox.value())
         self.settings.setValue('combine_mode', self.combine_mode_combo.currentText())
         self.settings.setValue('reverse_stack', self.reverse_stack_checkbox.isChecked())
         self.settings.setValue('spatial_stretch', self.spatial_stretch_spinbox.value())
@@ -517,7 +527,8 @@ class ScanControls(QWidget):
             'end_time_msecs',
             self.end_time_edit.time().msecsSinceStartOfDay()
         )
-        
+        self.settings.sync()
+
         if self.current_video_path:
             self.session_manager.save_session(self.current_video_path, self.get_all_settings())
     
@@ -527,6 +538,13 @@ class ScanControls(QWidget):
             direction_index = self.direction_combo.findText(direction)
             if direction_index >= 0:
                 self.direction_combo.setCurrentIndex(direction_index)
+
+        line_position = self.settings.value('line_position', -1)
+        if int(line_position) >= 0:
+            self.saved_line_position = int(line_position)
+            if self.video_loaded:
+                self.line_position_spinbox.setValue(self.saved_line_position)
+                self.line_position_slider.setValue(self.saved_line_position)
         
         line_width_start = self.settings.value('line_width_start', 1)
         if line_width_start is not None:
@@ -541,6 +559,14 @@ class ScanControls(QWidget):
             lerp_index = self.lerp_type_combo.findText(lerp_type)
             if lerp_index >= 0:
                 self.lerp_type_combo.setCurrentIndex(lerp_index)
+
+        crop_top = self.settings.value('crop_top', 0)
+        if crop_top is not None and self.video_loaded:
+            self.crop_top_spinbox.setValue(int(crop_top))
+
+        crop_bottom = self.settings.value('crop_bottom', 0)
+        if crop_bottom is not None and self.video_loaded:
+            self.crop_bottom_spinbox.setValue(int(crop_bottom))
         
         combine_mode = self.settings.value('combine_mode', 'average')
         if isinstance(combine_mode, str):
