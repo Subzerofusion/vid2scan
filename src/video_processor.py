@@ -135,28 +135,28 @@ class VideoProcessor:
         if self.cap is None:
             logger.error("Video not loaded")
             return None
-        
+
         self.reset_cancel()
-        
+
         start_frame = int(start_time * self.fps)
         end_frame = int(end_time * self.fps)
         start_frame = max(0, start_frame)
         end_frame = min(self.total_frames, end_frame)
-        
+
         if start_frame >= end_frame:
             logger.error(f"Invalid time range: start={start_time}, end={end_time}")
             return None
-        
+
         num_output_rows = (end_frame - start_frame) // frame_step
         if num_output_rows == 0:
             logger.warning("No frames to process")
             return None
-        
-        crop_top = max(0, min(crop_top, self.height - 1))
-        crop_bottom = max(0, min(crop_bottom, self.height - crop_top - 1))
-        effective_height = self.height - crop_top - crop_bottom
-        
-        line_y_clamped = max(0, min(line_y, effective_height - 1))
+
+        crop_left = max(0, min(crop_top, self.width - 1))
+        crop_right = max(0, min(crop_bottom, self.width - crop_left - 1))
+        effective_width = self.width - crop_left - crop_right
+
+        line_y_clamped = max(0, min(line_y, self.height - 1))
         
         lerp_func = LERP_FUNCTIONS.get(lerp_type, lerp)
         max_line_width = max(line_width_start, line_width_end)
@@ -170,10 +170,10 @@ class VideoProcessor:
             blend_margin = gaussian_blend_pixels
         else:
             blend_margin = 0
-        
-        output_width = self.width
+
+        output_width = effective_width
         output_height = num_output_rows * slice_height
-        
+
         if spatial_stretch != 1.0:
             output_width = max(1, int(output_width * spatial_stretch))
         
@@ -196,22 +196,22 @@ class VideoProcessor:
                     logger.warning(f"Failed to read frame {frame_idx}")
                     continue
                 
-                if crop_top > 0 or crop_bottom > 0:
-                    frame = frame[crop_top:self.height - crop_bottom, :]
-                
+                if crop_left > 0 or crop_right > 0:
+                    frame = frame[:, crop_left:self.width - crop_right]
+
                 t = frame_idx_in_slice / max(1, total_frames_to_process - 1)
                 current_line_width = int(round(lerp_func(line_width_start, line_width_end, t)))
-                current_line_width = max(1, min(current_line_width, effective_height - line_y_clamped))
+                current_line_width = max(1, min(current_line_width, effective_width))
                 
                 if gaussian_blend and combine_mode != 'average':
                     y_start = line_y_clamped
                     y_end = min(
-                        effective_height,
+                        self.height,
                         line_y_clamped + current_line_width + gaussian_blend_pixels
                     )
                 else:
                     y_start = line_y_clamped
-                    y_end = min(effective_height, line_y_clamped + current_line_width)
+                    y_end = min(self.height, line_y_clamped + current_line_width)
                 
                 if combine_mode == 'average' and current_line_width > 1:
                     slice_rows = y_end - y_start
