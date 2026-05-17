@@ -94,24 +94,26 @@ class ScanControls(QWidget):
         
         line_width_group.setLayout(line_width_layout)
         form_layout.addRow(line_width_group)
-        
-        crop_group = QGroupBox('Vertical Crop (px)')
+
+        self.crop_group = QGroupBox('Vertical Crop (px)')
         crop_layout = QHBoxLayout()
-        
-        crop_layout.addWidget(QLabel('Top:'))
+
+        self.crop_label1 = QLabel('Top:')
+        crop_layout.addWidget(self.crop_label1)
         self.crop_top_spinbox = QSpinBox()
         self.crop_top_spinbox.setRange(0, 9999)
         self.crop_top_spinbox.setValue(0)
         crop_layout.addWidget(self.crop_top_spinbox)
-        
-        crop_layout.addWidget(QLabel('Bottom:'))
+
+        self.crop_label2 = QLabel('Bottom:')
+        crop_layout.addWidget(self.crop_label2)
         self.crop_bottom_spinbox = QSpinBox()
         self.crop_bottom_spinbox.setRange(0, 9999)
         self.crop_bottom_spinbox.setValue(0)
         crop_layout.addWidget(self.crop_bottom_spinbox)
-        
-        crop_group.setLayout(crop_layout)
-        form_layout.addRow(crop_group)
+
+        self.crop_group.setLayout(crop_layout)
+        form_layout.addRow(self.crop_group)
         
         self.combine_mode_combo = QComboBox()
         self.combine_mode_combo.addItems(['average', 'stack'])
@@ -284,7 +286,18 @@ class ScanControls(QWidget):
     
     def on_direction_changed(self, direction):
         self.update_position_range(direction)
+        self.update_crop_labels(direction)
         self.save_settings()
+
+    def update_crop_labels(self, direction):
+        if direction == 'horizontal':
+            self.crop_group.setTitle('Horizontal Crop (px)')
+            self.crop_label1.setText('Left:')
+            self.crop_label2.setText('Right:')
+        else:
+            self.crop_group.setTitle('Vertical Crop (px)')
+            self.crop_label1.setText('Top:')
+            self.crop_label2.setText('Bottom:')
     
     def update_position_range(self, direction):
         if direction == 'horizontal':
@@ -352,14 +365,21 @@ class ScanControls(QWidget):
         self.video_width = width
         self.video_height = height
         self.video_duration = duration
-        
-        self.line_position_slider.setRange(0, height - 1)
-        self.line_position_spinbox.setRange(0, height - 1)
-        self.line_position_spinbox.setValue(height // 2)
-        self.line_position_slider.setValue(height // 2)
-        
-        self.crop_top_spinbox.setRange(0, height - 1)
-        self.crop_bottom_spinbox.setRange(0, height - 1)
+
+        direction = self.direction_combo.currentText()
+        self.update_position_range(direction)
+        self.update_crop_labels(direction)
+
+        if direction == 'horizontal':
+            self.line_position_spinbox.setValue(height // 2)
+            self.line_position_slider.setValue(height // 2)
+            self.crop_top_spinbox.setRange(0, width - 1)
+            self.crop_bottom_spinbox.setRange(0, width - 1)
+        else:
+            self.line_position_spinbox.setValue(width // 2)
+            self.line_position_slider.setValue(width // 2)
+            self.crop_top_spinbox.setRange(0, height - 1)
+            self.crop_bottom_spinbox.setRange(0, height - 1)
         
         max_msecs = int(duration * 1000)
         self.start_time_edit.blockSignals(True)
