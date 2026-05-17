@@ -153,15 +153,24 @@ class VideoPreviewWidget(QWidget):
             pen.setStyle(Qt.DashLine)
             pen.setColor(QColor(0, 255, 255))
             painter.setPen(pen)
-            
-            if self.crop_top > 0:
-                crop_top_y = int(y + self.crop_top * self.scale_y)
-                painter.drawLine(x, crop_top_y, x + scaled_width, crop_top_y)
-            
-            if self.crop_bottom > 0:
-                crop_bottom_y = int(y + (h - self.crop_bottom) * self.scale_y)
-                painter.drawLine(x, crop_bottom_y, x + scaled_width, crop_bottom_y)
-            
+
+            if self.direction == 'horizontal':
+                if self.crop_top > 0:
+                    crop_left_x = int(x + self.crop_top * self.scale_x)
+                    painter.drawLine(crop_left_x, y, crop_left_x, y + scaled_height)
+
+                if self.crop_bottom > 0:
+                    crop_right_x = int(x + (w - self.crop_bottom) * self.scale_x)
+                    painter.drawLine(crop_right_x, y, crop_right_x, y + scaled_height)
+            else:
+                if self.crop_top > 0:
+                    crop_top_y = int(y + self.crop_top * self.scale_y)
+                    painter.drawLine(x, crop_top_y, x + scaled_width, crop_top_y)
+
+                if self.crop_bottom > 0:
+                    crop_bottom_y = int(y + (h - self.crop_bottom) * self.scale_y)
+                    painter.drawLine(x, crop_bottom_y, x + scaled_width, crop_bottom_y)
+
             pen.setStyle(Qt.SolidLine)
     
     def mousePressEvent(self, event):
