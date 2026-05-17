@@ -9,6 +9,7 @@ logger.setLevel(logging.ERROR)
 
 class SlitscanWorker(QObject):
     progress_updated = Signal(int)
+    partial_result = Signal(object, str)
     finished = Signal(object, str)
     error = Signal(str)
     canceled = Signal(object, str)
@@ -21,6 +22,7 @@ class SlitscanWorker(QObject):
         self.save_path = save_path
         self.result: Optional[np.ndarray] = None
         self._is_canceled = False
+        self._partial_slices = []
     
     def cancel(self):
         self._is_canceled = True
@@ -60,6 +62,10 @@ class SlitscanWorker(QObject):
         self._check_cancel()
         return False
     
+    def _partial_callback(self, partial_image: np.ndarray):
+        if partial_image is not None:
+            self.partial_result.emit(partial_image.copy(), self.operation_type)
+    
     def _run_preview(self):
         direction = self.params['direction']
         
@@ -67,12 +73,14 @@ class SlitscanWorker(QObject):
             self.result = self.video_processor.preview_scan(
                 direction,
                 progress_callback=self._progress_callback,
+                partial_callback=self._partial_callback,
                 **{k: v for k, v in self.params.items() if k != 'direction'}
             )
         else:
             self.result = self.video_processor.preview_scan(
                 direction,
                 progress_callback=self._progress_callback,
+                partial_callback=self._partial_callback,
                 **{k: v for k, v in self.params.items() if k != 'direction'}
             )
         
@@ -97,12 +105,11 @@ class SlitscanWorker(QObject):
                 'spatial_stretch': self.params['spatial_stretch'],
                 'output_scale': self.params['output_scale'],
                 'crop_top': self.params.get('crop_top', 0),
-                'crop_bottom': self.params.get('crop_bottom', 0)
+                'crop_bottom': self.params.get('crop_bottom', 0),
+                'progress_callback': self._progress_callback,
+                'partial_callback': self._partial_callback
             }
-            self.result = self.video_processor.extract_horizontal_scan(
-                progress_callback=self._progress_callback,
-                **extract_params
-            )
+            self.result = self.video_processor.extract_horizontal_scan(**extract_params)
         else:
             extract_params = {
                 'line_x': self.params['line_pos'],
@@ -119,12 +126,11 @@ class SlitscanWorker(QObject):
                 'spatial_stretch': self.params['spatial_stretch'],
                 'output_scale': self.params['output_scale'],
                 'crop_top': self.params.get('crop_top', 0),
-                'crop_bottom': self.params.get('crop_bottom', 0)
+                'crop_bottom': self.params.get('crop_bottom', 0),
+                'progress_callback': self._progress_callback,
+                'partial_callback': self._partial_callback
             }
-            self.result = self.video_processor.extract_vertical_scan(
-                progress_callback=self._progress_callback,
-                **extract_params
-            )
+            self.result = self.video_processor.extract_vertical_scan(**extract_params)
         
         self.finished.emit(self.result, self.operation_type)
     

@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
     QPushButton, QGroupBox, QTimeEdit
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QTime, QSettings
+from src.utils.session import SessionManager
 
 
 class ScanControls(QWidget):
@@ -17,6 +18,8 @@ class ScanControls(QWidget):
     set_end_from_time = Signal()
     go_to_start_time = Signal()
     go_to_end_time = Signal()
+    update_preview_clicked = Signal()
+    generate_full_res_clicked = Signal()
     
     def __init__(self):
         super().__init__()
@@ -24,7 +27,9 @@ class ScanControls(QWidget):
         self.video_width = 0
         self.video_height = 0
         self.video_duration = 0.0
+        self.current_video_path = None
         self.settings = QSettings('Vid2Scan', 'Vid2Scan')
+        self.session_manager = SessionManager()
         self.setup_ui()
         self.setup_connections()
         self.setup_debounce()
@@ -70,7 +75,7 @@ class ScanControls(QWidget):
         lerp_layout = QHBoxLayout()
         lerp_layout.addWidget(QLabel('Interpolation:'))
         self.lerp_type_combo = QComboBox()
-        self.lerp_type_combo.addItems(['linear', 'ease-in', 'ease-out', 'ease-in-out'])
+        self.lerp_type_combo.addItems(['linear', 'log', 'exp'])
         lerp_layout.addWidget(self.lerp_type_combo)
         line_width_layout.addLayout(lerp_layout)
         
@@ -133,7 +138,9 @@ class ScanControls(QWidget):
         time_layout = QVBoxLayout()
         
         time_row = QHBoxLayout()
-        time_row.addWidget(QLabel('Start:'))
+        start_label = QLabel('Start:')
+        start_label.setFixedWidth(40)
+        time_row.addWidget(start_label)
         self.start_time_edit = QTimeEdit()
         self.start_time_edit.setDisplayFormat('HH:mm:ss.zzz')
         self.start_time_edit.setTime(QTime(0, 0, 0, 0))
@@ -147,7 +154,9 @@ class ScanControls(QWidget):
         time_layout.addLayout(time_row)
         
         time_row2 = QHBoxLayout()
-        time_row2.addWidget(QLabel('End:'))
+        end_label = QLabel('End:')
+        end_label.setFixedWidth(40)
+        time_row2.addWidget(end_label)
         self.end_time_edit = QTimeEdit()
         self.end_time_edit.setDisplayFormat('HH:mm:ss.zzz')
         self.end_time_edit.setTime(QTime(0, 0, 0, 0))
@@ -192,6 +201,12 @@ class ScanControls(QWidget):
         preview_group.setLayout(preview_layout)
         form_layout.addRow(preview_group)
         
+        self.update_preview_button = QPushButton('Update Preview')
+        form_layout.addRow(self.update_preview_button)
+        
+        self.generate_full_res_button = QPushButton('Generate Full Res')
+        form_layout.addRow(self.generate_full_res_button)
+        
         self.save_button = QPushButton('Save Image')
         self.save_button.setEnabled(False)
         form_layout.addRow(self.save_button)
@@ -219,9 +234,11 @@ class ScanControls(QWidget):
         self.preview_quality_combo.currentTextChanged.connect(self.on_param_changed)
         self.lerp_type_combo.currentTextChanged.connect(self.on_param_changed)
         self.gaussian_blend_checkbox.stateChanged.connect(self.on_gaussian_blend_changed)
-        self.gaussian_blend_spinbox.valueChanged.connect(self.on_param_changed)
+        self.gaussian_blend_spinbox.valueChanged.connect(self.on_gaussian_blend_pixels_changed)
         
         self.save_button.clicked.connect(self.save_clicked.emit)
+        self.update_preview_button.clicked.connect(self.update_preview_clicked.emit)
+        self.generate_full_res_button.clicked.connect(self.generate_full_res_clicked.emit)
         self.set_start_button.clicked.connect(self.set_start_from_time.emit)
         self.set_end_button.clicked.connect(self.set_end_from_time.emit)
         self.go_start_button.clicked.connect(self.go_to_start_time.emit)
@@ -249,12 +266,14 @@ class ScanControls(QWidget):
         self.line_position_spinbox.setValue(value)
         self.line_position_spinbox.blockSignals(False)
         self.line_position_changed.emit(value)
+        self.save_settings()
     
     def on_position_spinbox_changed(self, value):
         self.line_position_slider.blockSignals(True)
         self.line_position_slider.setValue(value)
         self.line_position_slider.blockSignals(False)
         self.line_position_changed.emit(value)
+        self.save_settings()
     
     def stop_debounce(self):
         if hasattr(self, 'debounce_timer') and self.debounce_timer.isActive():
@@ -302,13 +321,17 @@ class ScanControls(QWidget):
     
     def on_gaussian_blend_changed(self):
         self.gaussian_blend_spinbox.setEnabled(self.gaussian_blend_checkbox.isChecked())
-        self.on_param_changed()
+        self.save_settings()
+    
+    def on_gaussian_blend_pixels_changed(self):
+        self.save_settings()
     
     def on_time_changed(self):
         start_msecs = self.start_time_edit.time().msecsSinceStartOfDay()
         end_msecs = self.end_time_edit.time().msecsSinceStartOfDay()
         duration = (end_msecs - start_msecs) / 1000.0
         self.duration_label.setText(f'Duration: {max(0.0, duration):.2f} s')
+        self.save_settings()
     
     def on_scale_combo_changed(self, text):
         if text == 'Custom':
@@ -339,11 +362,18 @@ class ScanControls(QWidget):
         self.crop_bottom_spinbox.setRange(0, height - 1)
         
         max_msecs = int(duration * 1000)
+        self.start_time_edit.blockSignals(True)
+        self.end_time_edit.blockSignals(True)
         self.start_time_edit.setTimeRange(QTime(0, 0), QTime.fromMSecsSinceStartOfDay(max_msecs))
         self.end_time_edit.setTimeRange(QTime(0, 0), QTime.fromMSecsSinceStartOfDay(max_msecs))
         self.end_time_edit.setTime(QTime.fromMSecsSinceStartOfDay(max_msecs))
+        self.start_time_edit.blockSignals(False)
+        self.end_time_edit.blockSignals(False)
         
-        self.on_time_changed()
+        start_msecs = self.start_time_edit.time().msecsSinceStartOfDay()
+        end_msecs = self.end_time_edit.time().msecsSinceStartOfDay()
+        duration_val = (end_msecs - start_msecs) / 1000.0
+        self.duration_label.setText(f'Duration: {max(0.0, duration_val):.2f} s')
         
         self.setEnabled(True)
     
@@ -459,6 +489,17 @@ class ScanControls(QWidget):
         self.settings.setValue('preview_quality', self.preview_quality_combo.currentText())
         self.settings.setValue('gaussian_blend', self.gaussian_blend_checkbox.isChecked())
         self.settings.setValue('gaussian_blend_pixels', self.gaussian_blend_spinbox.value())
+        self.settings.setValue(
+            'start_time_msecs',
+            self.start_time_edit.time().msecsSinceStartOfDay()
+        )
+        self.settings.setValue(
+            'end_time_msecs',
+            self.end_time_edit.time().msecsSinceStartOfDay()
+        )
+        
+        if self.current_video_path:
+            self.session_manager.save_session(self.current_video_path, self.get_all_settings())
     
     def load_settings(self):
         direction = self.settings.value('direction', 'horizontal')
@@ -520,3 +561,117 @@ class ScanControls(QWidget):
         gaussian_blend_pixels = self.settings.value('gaussian_blend_pixels', 5)
         if gaussian_blend_pixels is not None:
             self.gaussian_blend_spinbox.setValue(int(gaussian_blend_pixels))
+        
+        start_time_msecs = self.settings.value('start_time_msecs', None)
+        if start_time_msecs is not None:
+            self.start_time_edit.setTime(
+                QTime.fromMSecsSinceStartOfDay(int(start_time_msecs))
+            )
+        
+        end_time_msecs = self.settings.value('end_time_msecs', None)
+        if end_time_msecs is not None:
+            self.end_time_edit.setTime(
+                QTime.fromMSecsSinceStartOfDay(int(end_time_msecs))
+            )
+    
+    def get_all_settings(self) -> dict:
+        return {
+            'direction': self.direction_combo.currentText(),
+            'line_position': self.line_position_spinbox.value(),
+            'line_width_start': self.line_width_start_spinbox.value(),
+            'line_width_end': self.line_width_end_spinbox.value(),
+            'lerp_type': self.lerp_type_combo.currentText(),
+            'crop_top': self.crop_top_spinbox.value(),
+            'crop_bottom': self.crop_bottom_spinbox.value(),
+            'combine_mode': self.combine_mode_combo.currentText(),
+            'reverse_stack': self.reverse_stack_checkbox.isChecked(),
+            'spatial_stretch': self.spatial_stretch_spinbox.value(),
+            'frame_step': self.frame_step_spinbox.value(),
+            'output_scale_index': self.output_scale_combo.currentIndex(),
+            'custom_scale': self.custom_scale_spinbox.value(),
+            'preview_quality': self.preview_quality_combo.currentText(),
+            'gaussian_blend': self.gaussian_blend_checkbox.isChecked(),
+            'gaussian_blend_pixels': self.gaussian_blend_spinbox.value(),
+            'start_time_msecs': self.start_time_edit.time().msecsSinceStartOfDay(),
+            'end_time_msecs': self.end_time_edit.time().msecsSinceStartOfDay()
+        }
+    
+    def set_all_settings(self, settings: dict):
+        if 'direction' in settings:
+            idx = self.direction_combo.findText(settings['direction'])
+            if idx >= 0:
+                self.direction_combo.setCurrentIndex(idx)
+        
+        if 'line_position' in settings and self.video_loaded:
+            self.line_position_spinbox.setValue(settings['line_position'])
+            self.line_position_slider.setValue(settings['line_position'])
+        
+        if 'line_width_start' in settings:
+            self.line_width_start_spinbox.setValue(settings['line_width_start'])
+        if 'line_width_end' in settings:
+            self.line_width_end_spinbox.setValue(settings['line_width_end'])
+        
+        if 'lerp_type' in settings:
+            idx = self.lerp_type_combo.findText(settings['lerp_type'])
+            if idx >= 0:
+                self.lerp_type_combo.setCurrentIndex(idx)
+        
+        if 'crop_top' in settings:
+            self.crop_top_spinbox.setValue(settings['crop_top'])
+        if 'crop_bottom' in settings:
+            self.crop_bottom_spinbox.setValue(settings['crop_bottom'])
+        
+        if 'combine_mode' in settings:
+            idx = self.combine_mode_combo.findText(settings['combine_mode'])
+            if idx >= 0:
+                self.combine_mode_combo.setCurrentIndex(idx)
+        
+        if 'reverse_stack' in settings:
+            self.reverse_stack_checkbox.setChecked(settings['reverse_stack'])
+        
+        if 'spatial_stretch' in settings:
+            self.spatial_stretch_spinbox.setValue(settings['spatial_stretch'])
+        if 'frame_step' in settings:
+            self.frame_step_spinbox.setValue(settings['frame_step'])
+        if 'output_scale_index' in settings:
+            self.output_scale_combo.setCurrentIndex(settings['output_scale_index'])
+        if 'custom_scale' in settings:
+            self.custom_scale_spinbox.setValue(settings['custom_scale'])
+        if 'preview_quality' in settings:
+            idx = self.preview_quality_combo.findText(settings['preview_quality'])
+            if idx >= 0:
+                self.preview_quality_combo.setCurrentIndex(idx)
+        
+        if 'gaussian_blend' in settings:
+            self.gaussian_blend_checkbox.setChecked(settings['gaussian_blend'])
+        if 'gaussian_blend_pixels' in settings:
+            self.gaussian_blend_spinbox.setValue(settings['gaussian_blend_pixels'])
+        
+        if 'start_time_msecs' in settings:
+            self.start_time_edit.blockSignals(True)
+            self.start_time_edit.setTime(QTime.fromMSecsSinceStartOfDay(settings['start_time_msecs']))
+            self.start_time_edit.blockSignals(False)
+        if 'end_time_msecs' in settings:
+            self.end_time_edit.blockSignals(True)
+            self.end_time_edit.setTime(QTime.fromMSecsSinceStartOfDay(settings['end_time_msecs']))
+            self.end_time_edit.blockSignals(False)
+        
+        start_msecs = self.start_time_edit.time().msecsSinceStartOfDay()
+        end_msecs = self.end_time_edit.time().msecsSinceStartOfDay()
+        duration = (end_msecs - start_msecs) / 1000.0
+        self.duration_label.setText(f'Duration: {max(0.0, duration):.2f} s')
+    
+    def save_session(self, video_path: str):
+        self.current_video_path = video_path
+        settings = self.get_all_settings()
+        self.session_manager.save_session(video_path, settings)
+    
+    def load_session(self) -> str | None:
+        session = self.session_manager.load_session()
+        if session:
+            video_path = session.get('video_path')
+            self.current_video_path = video_path
+            if session.get('settings'):
+                self.set_all_settings(session['settings'])
+            return video_path if video_path else None
+        return None

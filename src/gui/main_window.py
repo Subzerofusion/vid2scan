@@ -38,12 +38,61 @@ class MainWindow(QMainWindow):
         self.create_status_bar()
         self.setup_status_bar_progress()
         self.setup_shortcuts()
-        
         self.scan_controls.setEnabled(False)
+        self.load_session()
     
     def setup_shortcuts(self):
         self.cancel_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         self.cancel_shortcut.activated.connect(self.cancel_current_operation)
+    
+    def load_session(self):
+        video_path = self.scan_controls.load_session()
+        if video_path:
+            self._load_video_from_path(video_path)
+    
+    def _load_video_from_path(self, file_path: str):
+        if self.video_processor.load_video(file_path):
+            vp = self.video_processor
+            self.status_bar.showMessage(
+                f"Loaded: {Path(file_path).name} | "
+                f"Size: {vp.width}x{vp.height} | "
+                f"Duration: {vp.duration:.2f}s | "
+                f"FPS: {vp.fps:.2f}"
+            )
+            
+            first_frame = self.video_processor.get_frame_at_time(0)
+            if first_frame is not None:
+                self.video_preview.set_frame(first_frame, reset_position=True)
+                self.video_preview.set_video_properties(
+                    vp.width, vp.height, vp.fps
+                )
+                self.video_preview.set_video_duration(vp.duration)
+            
+            self.scan_controls.set_video_properties(
+                vp.fps, vp.width, vp.height, vp.duration
+            )
+            
+            session = self.scan_controls.session_manager.load_session()
+            if session and session.get('settings'):
+                self.scan_controls.set_all_settings(session['settings'])
+            
+            direction = self.scan_controls.direction_combo.currentText()
+            line_pos = self.scan_controls.line_position_spinbox.value()
+            self.video_preview.set_direction(direction)
+            self.video_preview.set_line_position(line_pos)
+            
+            self.scan_controls.setEnabled(True)
+            self.save_action.setEnabled(False)
+            self.current_slitscan = None
+            self.slitscan_preview.clear()
+            return True
+        
+        if hasattr(self.scan_controls, 'session_manager'):
+            try:
+                self.scan_controls.session_manager.clear_session()
+            except Exception:
+                pass
+        return False
     
     def create_menu_bar(self):
         menubar = self.menuBar()
@@ -91,31 +140,12 @@ class MainWindow(QMainWindow):
         self.slitscan_preview = SlitscanPreview()
         self.video_preview = VideoPreview()
         
-        preview_buttons = QWidget()
-        preview_buttons_layout = QHBoxLayout(preview_buttons)
-        preview_buttons_layout.setContentsMargins(5, 5, 5, 5)
-        
-        self.update_preview_button = QPushButton('Update Preview')
-        self.update_preview_button.clicked.connect(self.update_preview)
-        preview_buttons_layout.addWidget(self.update_preview_button)
-        
-        self.preview_size_label = QLabel('Size: -')
-        self.preview_size_label.setStyleSheet('color: #666; font-size: 10px;')
-        preview_buttons_layout.addWidget(self.preview_size_label)
-        
-        preview_buttons_layout.addStretch()
-        
-        self.generate_button = QPushButton('Generate Full Res')
-        self.generate_button.clicked.connect(self.generate_full_scan)
-        preview_buttons_layout.addWidget(self.generate_button)
-        
         left_splitter = QSplitter(Qt.Orientation.Vertical)
         
         preview_container = QWidget()
         preview_layout = QVBoxLayout(preview_container)
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.addWidget(self.slitscan_preview, 1)
-        preview_layout.addWidget(preview_buttons)
         
         left_splitter.addWidget(preview_container)
         left_splitter.addWidget(self.video_preview)
@@ -154,6 +184,8 @@ class MainWindow(QMainWindow):
         self.scan_controls.set_end_from_time.connect(self.on_set_end_from_time)
         self.scan_controls.go_to_start_time.connect(self.on_go_to_start_time)
         self.scan_controls.go_to_end_time.connect(self.on_go_to_end_time)
+        self.scan_controls.update_preview_clicked.connect(self.update_preview)
+        self.scan_controls.generate_full_res_clicked.connect(self.generate_full_scan)
     
     def create_status_bar(self):
         self.status_bar = QStatusBar()
@@ -251,6 +283,7 @@ class MainWindow(QMainWindow):
         
         self.current_thread.started.connect(worker.run)
         worker.progress_updated.connect(self.on_worker_progress)
+        worker.partial_result.connect(self.on_worker_partial_result)
         worker.finished.connect(lambda r, t=operation: self.on_worker_finished(r, t))
         worker.error.connect(self.on_worker_error)
         worker.canceled.connect(lambda r, t=operation: self.on_worker_canceled(r, t))
@@ -272,34 +305,26 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(percent)
         self.status_bar.showMessage(f"Processing... {percent}% (Press ESC to cancel)")
     
+    def on_worker_partial_result(self, partial_image, operation_type: str):
+        if partial_image is not None:
+            self.slitscan_preview.set_image(partial_image)
+    
     def on_worker_finished(self, result, operation_type: str):
         if operation_type == 'preview':
             if result is not None:
                 self.slitscan_preview.set_image(result)
-                if len(result.shape) == 2:
-                    h, w = result.shape
-                else:
-                    h, w = result.shape[0], result.shape[1]
-                self.preview_size_label.setText(f'Size: {w}x{h}')
                 self.status_bar.showMessage("Preview updated")
             else:
-                self.preview_size_label.setText('Size: -')
                 self.status_bar.showMessage("No frames in specified range")
                 
         elif operation_type == 'full_scan':
             if result is not None:
                 self.current_slitscan = result
                 self.slitscan_preview.set_image(result)
-                if len(result.shape) == 2:
-                    h, w = result.shape
-                else:
-                    h, w = result.shape[0], result.shape[1]
-                self.preview_size_label.setText(f'Size: {w}x{h}')
                 self.save_action.setEnabled(True)
                 self.scan_controls.enable_save_button()
                 self.status_bar.showMessage("Full resolution slitscan generated")
             else:
-                self.preview_size_label.setText('Size: -')
                 self.status_bar.showMessage("No frames in specified range")
                 
         elif operation_type == 'save_image':
@@ -354,30 +379,8 @@ class MainWindow(QMainWindow):
         
         logger.info(f"Opening video: {file_path}")
         
-        if self.video_processor.load_video(file_path):
-            vp = self.video_processor
-            self.status_bar.showMessage(
-                f"Loaded: {Path(file_path).name} | "
-                f"Size: {vp.width}x{vp.height} | "
-                f"Duration: {vp.duration:.2f}s | "
-                f"FPS: {vp.fps:.2f}"
-            )
-            
-            first_frame = self.video_processor.get_frame_at_time(0)
-            if first_frame is not None:
-                self.video_preview.set_frame(first_frame, reset_position=True)
-                self.video_preview.set_video_properties(
-                    vp.width, vp.height, vp.fps
-                )
-                self.video_preview.set_video_duration(vp.duration)
-            
-            self.scan_controls.set_video_properties(
-                vp.fps, vp.width, vp.height, vp.duration
-            )
-            self.scan_controls.setEnabled(True)
-            self.save_action.setEnabled(False)
-            self.current_slitscan = None
-            self.slitscan_preview.clear()
+        if self._load_video_from_path(file_path):
+            self.scan_controls.save_session(file_path)
         else:
             error_msg = "Could not open video file. Please check the file format."
             logger.error(f"Failed to open video {file_path}: {error_msg}")
@@ -484,6 +487,7 @@ class MainWindow(QMainWindow):
     def on_go_to_start_time(self):
         start_time = self.scan_controls.get_start_time()
         self._current_time = start_time
+        self.video_preview.seek_to_time(start_time)
         frame = self.video_processor.get_frame_at_time(start_time)
         if frame is not None:
             self.video_preview.set_frame(frame, reset_position=False)
@@ -491,6 +495,7 @@ class MainWindow(QMainWindow):
     def on_go_to_end_time(self):
         end_time = self.scan_controls.get_end_time()
         self._current_time = end_time
+        self.video_preview.seek_to_time(end_time)
         frame = self.video_processor.get_frame_at_time(end_time)
         if frame is not None:
             self.video_preview.set_frame(frame, reset_position=False)

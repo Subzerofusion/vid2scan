@@ -20,7 +20,7 @@ class SlitscanPreviewWidget(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
     
     def set_image(self, image: np.ndarray):
-        self.current_image = image
+        self.current_image = image.copy() if image is not None else None
         self.update_pixmap()
         if self.pixmap:
             self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -57,7 +57,7 @@ class SlitscanPreviewWidget(QWidget):
                 qimg = QImage(scaled_copy.data, w_s, h_s, bytes_per_line, QImage.Format.Format_RGB888).copy()
         
         self.pixmap = QPixmap.fromImage(qimg)
-        self.setMinimumSize(new_w, new_h)
+        self.setFixedSize(new_w, new_h)
         self.update()
     
     def paintEvent(self, event):
@@ -74,13 +74,46 @@ class SlitscanPreviewWidget(QWidget):
         painter.drawPixmap(x, y, self.pixmap)
     
     def wheelEvent(self, event):
+        if self.current_image is None or self.pixmap is None:
+            return
+        
         delta = event.angleDelta().y()
         factor = 1.1 if delta > 0 else 0.9
         
-        new_zoom = self.zoom_level * factor
+        old_zoom = self.zoom_level
+        new_zoom = old_zoom * factor
         new_zoom = max(self.min_zoom, min(new_zoom, self.max_zoom))
         
+        if new_zoom == old_zoom:
+            return
+        
+        scroll_parent = self.parent()
+        while scroll_parent and not isinstance(scroll_parent, QScrollArea):
+            scroll_parent = scroll_parent.parent()
+        
+        if not scroll_parent:
+            self.set_zoom(new_zoom)
+            return
+        
+        viewport = scroll_parent.viewport()
+        cursor_pos_viewport = viewport.mapFromGlobal(event.globalPosition().toPoint())
+        
+        h_bar = scroll_parent.horizontalScrollBar()
+        v_bar = scroll_parent.verticalScrollBar()
+        
+        old_scroll_x = h_bar.value()
+        old_scroll_y = v_bar.value()
+        
+        logical_x = (old_scroll_x + cursor_pos_viewport.x()) / max(old_zoom, 1e-6)
+        logical_y = (old_scroll_y + cursor_pos_viewport.y()) / max(old_zoom, 1e-6)
+        
         self.set_zoom(new_zoom)
+        
+        new_scroll_x = int(logical_x * new_zoom - cursor_pos_viewport.x())
+        new_scroll_y = int(logical_y * new_zoom - cursor_pos_viewport.y())
+        
+        h_bar.setValue(max(h_bar.minimum(), min(new_scroll_x, h_bar.maximum())))
+        v_bar.setValue(max(v_bar.minimum(), min(new_scroll_y, v_bar.maximum())))
     
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.pixmap is not None:
@@ -140,7 +173,7 @@ class SlitscanPreview(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         
         self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(False)
+        self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -156,44 +189,31 @@ class SlitscanPreview(QWidget):
         self.info_label = QLabel("No slitscan generated")
         info_layout.addWidget(self.info_label, 1)
         
+        info_layout.addWidget(QLabel("|"))
+        
         self.zoom_label = QLabel("100%")
         self.zoom_label.setFixedWidth(60)
         info_layout.addWidget(self.zoom_label)
         
-        main_layout.addWidget(info_frame)
-        
-        controls_layout = QHBoxLayout()
-        
-        self.zoom_out_button = QPushButton("-")
-        self.zoom_out_button.setFixedWidth(30)
-        self.zoom_out_button.clicked.connect(self.zoom_out)
-        controls_layout.addWidget(self.zoom_out_button)
-        
-        self.zoom_in_button = QPushButton("+")
-        self.zoom_in_button.setFixedWidth(30)
-        self.zoom_in_button.clicked.connect(self.zoom_in)
-        controls_layout.addWidget(self.zoom_in_button)
-        
-        controls_layout.addWidget(QLabel("Scroll to zoom, drag to pan"))
-        controls_layout.addStretch()
+        info_layout.addWidget(QLabel("|"))
         
         self.fit_width_button = QPushButton("Fit Width")
         self.fit_width_button.clicked.connect(self.fit_to_width)
-        controls_layout.addWidget(self.fit_width_button)
+        info_layout.addWidget(self.fit_width_button)
         
         self.fit_height_button = QPushButton("Fit Height")
         self.fit_height_button.clicked.connect(self.fit_to_height)
-        controls_layout.addWidget(self.fit_height_button)
+        info_layout.addWidget(self.fit_height_button)
         
         self.reset_view_button = QPushButton("Reset")
         self.reset_view_button.clicked.connect(self.reset_view)
-        controls_layout.addWidget(self.reset_view_button)
+        info_layout.addWidget(self.reset_view_button)
         
-        main_layout.addLayout(controls_layout)
+        main_layout.addWidget(info_frame)
     
     def set_image(self, image: np.ndarray):
-        self.current_image = image
-        self.image_widget.set_image(image)
+        self.current_image = image.copy() if image is not None else None
+        self.image_widget.set_image(self.current_image)
         self.update_info()
     
     def update_info(self):
@@ -222,21 +242,21 @@ class SlitscanPreview(QWidget):
         if self.current_image is None:
             return
         
-        scroll_width = self.scroll_area.viewport().width() - 20
+        viewport_width = self.scroll_area.viewport().width()
         image_width = self.current_image.shape[1]
         
-        if image_width > 0:
-            self.set_zoom(scroll_width / image_width)
+        if image_width > 0 and viewport_width > 0:
+            self.set_zoom(viewport_width / image_width)
     
     def fit_to_height(self):
         if self.current_image is None:
             return
         
-        scroll_height = self.scroll_area.viewport().height() - 20
+        viewport_height = self.scroll_area.viewport().height()
         image_height = self.current_image.shape[0]
         
-        if image_height > 0:
-            self.set_zoom(scroll_height / image_height)
+        if image_height > 0 and viewport_height > 0:
+            self.set_zoom(viewport_height / image_height)
     
     def reset_view(self):
         self.set_zoom(1.0)
