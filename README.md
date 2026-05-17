@@ -2,6 +2,8 @@
 
 A cross-platform Python GUI application for creating line scan and slit scan photographs from videos.
 
+> **WARNING**: This codebase is entirely "vibe coded" — written by feel, trial-and-error, and guesswork rather than proper software engineering practices. The code works, but it's fragile, untested, and will likely break in unexpected ways. Not a good thing. Use at your own risk.
+
 ## Features
 
 - **Multi-pixel slit support**: Extract single-pixel lines or multi-pixel slits (1-100px)
